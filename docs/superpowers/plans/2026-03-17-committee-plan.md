@@ -1,0 +1,608 @@
+# Committee Implementation Plan
+
+> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build a Claude Code skill (`/committee`) that orchestrates parallel code reviews from Claude, Codex, Kiro, and Gemini, verifies reviewer claims, and synthesizes a structured report.
+
+**Architecture:** A thin skill launcher dispatches a coordinator subagent with fresh context. The coordinator dispatches 4 reviewer processes in parallel, then a verifier subagent, then synthesizes the final report itself. All prompt logic lives in markdown template files.
+
+**Tech Stack:** Claude Code skills (markdown), Bash (CLI orchestration), Claude Code Agent tool (subagents)
+
+**Spec:** `docs/superpowers/specs/2026-03-17-committee-design.md`
+
+---
+
+## File Structure
+
+```
+committee/
+├── skills/
+│   └── committee/
+│       └── SKILL.md              # Skill definition — thin launcher, parses input, dispatches coordinator
+├── prompts/
+│   ├── coordinator.md            # Coordinator subagent prompt — orchestrates all phases
+│   ├── verifier.md               # Verifier subagent prompt — assesses claim validity
+│   └── reviewers/
+│       ├── kiro.md               # Kiro review prompt template
+│       └── gemini.md             # Gemini review prompt template
+├── CLAUDE.md                     # Project conventions, prerequisites, usage
+└── docs/
+    └── superpowers/
+        ├── specs/
+        │   └── 2026-03-17-committee-design.md
+        └── plans/
+            └── 2026-03-17-committee-plan.md
+```
+
+**No custom prompts needed for:**
+- Claude — uses existing `superpowers:code-reviewer` subagent type
+- Codex — uses `codex review` with built-in format
+
+---
+
+## Chunk 1: Foundation and Reviewer Prompts
+
+### Task 1: CLAUDE.md
+
+**Files:**
+- Create: `CLAUDE.md`
+
+- [ ] **Step 1: Write CLAUDE.md**
+
+This file documents project conventions, prerequisites, and usage for anyone (human or agent) working in this repo.
+
+```markdown
+# Committee
+
+Multi-perspective code review agent for Claude Code.
+
+## What This Is
+
+A Claude Code skill (`/committee`) that runs parallel code reviews from four AI reviewers (Claude, Codex, Kiro, Gemini), verifies claims, and synthesizes a structured report.
+
+## Prerequisites
+
+All four reviewer CLIs must be installed and authenticated:
+
+- **codex** — `npm install -g @openai/codex` then `codex login`
+- **kiro-cli** — See https://kiro.dev for installation, then `kiro-cli settings` to configure
+- **gemini** — `npm install -g @google/gemini-cli` then configure `GEMINI_API_KEY` in `~/.gemini/settings.json`
+  - Install code-review extension: `gemini extensions install https://github.com/gemini-cli-extensions/code-review`
+- **claude** — Already running if you're reading this in Claude Code
+
+## Usage
+
+```
+/committee                              # Auto-detect scope
+/committee --base main                  # Review branch diff from main
+/committee --commit abc123              # Review specific commit
+/committee #123                         # Review PR #123
+/committee "review the auth changes"    # Vague — coordinator figures it out
+```
+
+## Project Structure
+
+- `skills/committee/SKILL.md` — The skill entry point (thin launcher)
+- `prompts/coordinator.md` — Coordinator subagent prompt template
+- `prompts/verifier.md` — Verifier subagent prompt template
+- `prompts/reviewers/` — Prompt templates for Kiro and Gemini
+- `docs/superpowers/specs/` — Design spec
+- `docs/superpowers/plans/` — Implementation plan
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add CLAUDE.md
+git commit -m "Add CLAUDE.md with project conventions and prerequisites"
+```
+
+---
+
+### Task 2: Kiro Reviewer Prompt
+
+**Files:**
+- Create: `prompts/reviewers/kiro.md`
+
+- [ ] **Step 1: Write Kiro review prompt template**
+
+This template is interpolated by the coordinator and passed to `kiro-cli chat --no-interactive --trust-tools=fs_read "<interpolated prompt>"`. It provides context without prescribing review format — let Kiro be itself.
+
+```markdown
+Review the code changes in this git repository.
+
+{SCOPE_DESCRIPTION}
+
+{GIT_RANGE_INSTRUCTIONS}
+
+Focus your review on whatever you think is most important. Look at the actual code — read the changed files, understand what they do, and give your honest assessment.
+```
+
+Placeholders (filled by the coordinator):
+- `{SCOPE_DESCRIPTION}` — e.g. "Changes on branch feature/auth compared to main" or "Commit abc123: Add user validation"
+- `{GIT_RANGE_INSTRUCTIONS}` — e.g. "Run `git diff main...HEAD` to see the changes" or "Run `git show abc123` to see the commit"
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add prompts/reviewers/kiro.md
+git commit -m "Add Kiro reviewer prompt template"
+```
+
+---
+
+### Task 3: Gemini Reviewer Prompt
+
+**Files:**
+- Create: `prompts/reviewers/gemini.md`
+
+- [ ] **Step 1: Write Gemini review prompt template**
+
+This template is interpolated by the coordinator and passed to `gemini -p "<interpolated prompt>" -e code-review -y -o text`. Similar to Kiro — provide context, let the tool's native review style take over.
+
+```markdown
+Review the code changes in this git repository.
+
+{SCOPE_DESCRIPTION}
+
+{GIT_RANGE_INSTRUCTIONS}
+
+Give a thorough code review. Focus on whatever you think is most important — bugs, security, design, testing, performance, maintainability. Be specific with file and line references.
+```
+
+Same placeholders as kiro.md, filled by the coordinator.
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add prompts/reviewers/gemini.md
+git commit -m "Add Gemini reviewer prompt template"
+```
+
+---
+
+### Task 4: Verifier Subagent Prompt
+
+**Files:**
+- Create: `prompts/verifier.md`
+
+- [ ] **Step 1: Write verifier prompt template**
+
+The verifier receives all 4 raw reviews and the git range. It assesses claims — it does NOT add new findings or produce the final report.
+
+```markdown
+# Claim Verifier
+
+You are verifying claims made by code reviewers. Your job is to assess the validity of their assertions — not to add new findings or produce a final report.
+
+## Review Scope
+
+{SCOPE_DESCRIPTION}
+
+Git range: `{BASE_SHA}..{HEAD_SHA}` (if available — the coordinator must resolve concrete SHAs before invoking the verifier, even for vague inputs)
+
+## Reviewer Outputs
+
+### Claude Review
+{CLAUDE_REVIEW}
+
+### Codex Review
+{CODEX_REVIEW}
+
+### Kiro Review
+{KIRO_REVIEW}
+
+### Gemini Review
+{GEMINI_REVIEW}
+
+## Your Task
+
+1. Read through all four reviews and extract concrete, verifiable assertions. Examples:
+   - "Function X doesn't handle null" — verifiable, read the code
+   - "Tests don't cover the error path" — verifiable, read the tests
+   - "This could be slow at scale" — opinion, mark Unverifiable
+   - "SQL injection risk in query builder" — verifiable, read the code
+
+2. For each verifiable claim, use your judgment on how to check it:
+   - **Read the code** for assertions about what code does or doesn't do
+   - **Run tests** if a reviewer questions test correctness or coverage
+   - **Cross-reference reviewers** to flag contradictions (reviewer A says X is fine, reviewer B says X is broken)
+   - **Skip verification** for subjective opinions, style preferences, or vague suggestions — tag as Unverifiable
+
+3. Tag each claim:
+   - **Confirmed** — you found evidence supporting the claim. Cite the evidence (file:line, test output, etc.)
+   - **Refuted** — you found evidence contradicting the claim. Explain what you found.
+   - **Unverifiable** — you can't practically check this claim. Explain why.
+
+## Output Format
+
+Return a structured list of claims. For each claim:
+
+```
+### Claim: "<the assertion>"
+- **Source:** <which reviewer(s)>
+- **Status:** Confirmed | Refuted | Unverifiable
+- **Evidence:** <what you found, with file:line references or test output>
+- **Notes:** <any additional context>
+```
+
+List all claims. Do not skip any. Do not add new findings — only verify what the reviewers said.
+
+If two reviewers contradict each other, verify both claims and note the contradiction explicitly.
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add prompts/verifier.md
+git commit -m "Add verifier subagent prompt template"
+```
+
+---
+
+### Chunk 1 Verification
+
+- [ ] **Verify all files exist and placeholders are consistent**
+
+```bash
+# Check all Chunk 1 files exist
+ls CLAUDE.md prompts/reviewers/kiro.md prompts/reviewers/gemini.md prompts/verifier.md
+
+# Check placeholder consistency — all templates should use the same names
+grep -h '{[A-Z_]*}' prompts/reviewers/kiro.md prompts/reviewers/gemini.md prompts/verifier.md | sort -u
+```
+
+Expected placeholders across all templates:
+- `{SCOPE_DESCRIPTION}` — in kiro.md, gemini.md, verifier.md
+- `{GIT_RANGE_INSTRUCTIONS}` — in kiro.md, gemini.md
+- `{BASE_SHA}`, `{HEAD_SHA}` — in verifier.md
+- `{CLAUDE_REVIEW}`, `{CODEX_REVIEW}`, `{KIRO_REVIEW}`, `{GEMINI_REVIEW}` — in verifier.md
+
+If any file is missing or placeholder names don't match, fix before proceeding.
+
+---
+
+## Chunk 2: Coordinator Prompt and Skill
+
+### Task 5: Coordinator Subagent Prompt
+
+**Files:**
+- Create: `prompts/coordinator.md`
+
+This is the most complex piece — the coordinator orchestrates all three phases (dispatch reviewers, verify, synthesize).
+
+- [ ] **Step 1: Write coordinator prompt template**
+
+```markdown
+# Committee Coordinator
+
+You are the coordinator for a multi-perspective code review. You will orchestrate four parallel code reviews, verify their claims, and synthesize a single structured report.
+
+## Review Context
+
+{REVIEW_CONTEXT}
+
+## Phase 1: Dispatch Reviewers
+
+Dispatch all four reviewers in parallel. Use a single message with multiple tool calls.
+
+### Reviewer 1: Claude (superpowers:code-reviewer)
+
+Dispatch via Agent tool with `subagent_type: "superpowers:code-reviewer"`. Use this prompt:
+
+```
+{CLAUDE_REVIEWER_PROMPT}
+```
+
+The prompt should follow the code-reviewer template pattern:
+- WHAT_WAS_IMPLEMENTED: The changes being reviewed
+- PLAN_OR_REQUIREMENTS: "General code review — no specific plan"
+- BASE_SHA: {BASE_SHA}
+- HEAD_SHA: {HEAD_SHA}
+- DESCRIPTION: {SCOPE_DESCRIPTION}
+
+### Reviewer 2: Codex
+
+Dispatch via Bash tool with a 5-minute (300000ms) timeout:
+
+For branch diff:
+```bash
+codex review --base {BASE_BRANCH}
+```
+
+For single commit:
+```bash
+codex review --commit {COMMIT_SHA}
+```
+
+For uncommitted changes:
+```bash
+codex review --uncommitted
+```
+
+### Reviewer 3: Kiro
+
+Read the prompt template at `prompts/reviewers/kiro.md`. Fill in the placeholders:
+- `{SCOPE_DESCRIPTION}` — describe the changes
+- `{GIT_RANGE_INSTRUCTIONS}` — tell Kiro what git command to run
+
+Dispatch via Bash tool with a 5-minute (300000ms) timeout:
+```bash
+kiro-cli chat --no-interactive --trust-tools=fs_read "<filled prompt>"
+```
+
+### Reviewer 4: Gemini
+
+Read the prompt template at `prompts/reviewers/gemini.md`. Fill in the placeholders (same as Kiro).
+
+Dispatch via Bash tool with a 5-minute (300000ms) timeout:
+```bash
+gemini -p "<filled prompt>" -e code-review -y -o text
+```
+
+### Handling Scope
+
+The review context may be precise or vague. Adapt:
+
+- **Git range provided (base + head SHAs):** Use directly. Map to each tool's flags.
+- **Branch name provided:** Use as-is for `codex review --base <branch>`. For others, determine the diff range with `git merge-base <branch> HEAD` and `git rev-parse HEAD`.
+- **PR number/URL provided:** Use `gh pr diff <number>` to get the diff. Use `gh pr view <number> --json baseRefName,headRefName` to get branch names for codex.
+- **Commit SHA provided:** Use `codex review --commit <sha>`. For others, use `git show <sha>` context.
+- **Vague description:** Figure out the scope yourself. Read recent git log, check branch state, look for relevant files. Then proceed with whatever you determine.
+- **No context at all:** Check for uncommitted changes first. Then check if on a feature branch (not main/master). Then fall back to last commit.
+
+## Phase 2: Verify Claims
+
+After all reviewers return (or timeout/fail), collect the results.
+
+**Check quorum:** If fewer than 2 reviewers succeeded, STOP. Report the failures to the user:
+
+```
+## Committee Code Review — ABORTED
+
+**Reason:** Only N of 4 reviewers completed successfully. Minimum quorum is 2.
+
+**Failures:**
+- <Reviewer>: <failure reason>
+...
+
+**Successful reviews are not shown** — insufficient reviewer diversity for a reliable committee review.
+```
+
+**If quorum met:** Read the verifier prompt template at `prompts/verifier.md`. Fill in:
+- `{SCOPE_DESCRIPTION}` — same as what you gave reviewers
+- `{BASE_SHA}` and `{HEAD_SHA}` — the git range
+- `{CLAUDE_REVIEW}` — Claude's raw review output (or "REVIEWER FAILED: <reason>" if it failed)
+- `{CODEX_REVIEW}` — Codex's raw review output (or failure note)
+- `{KIRO_REVIEW}` — Kiro's raw review output (or failure note)
+- `{GEMINI_REVIEW}` — Gemini's raw review output (or failure note)
+
+Dispatch the verifier as a subagent via the Agent tool. Wait for it to return.
+
+## Phase 3: Synthesize
+
+Now produce the final report. You have:
+- The raw review outputs
+- The verifier's annotated claims
+
+Synthesize into this format:
+
+```
+## Committee Code Review
+
+**Scope:** {scope_description} ({base_sha}..{head_sha}, N files changed)
+**Reviewers:** {list of reviewers that succeeded, note any that failed}
+
+### Critical (Must Fix)
+1. **<finding title>**
+   - Flagged by: <reviewer(s) who raised this>
+   - Status: ✅ Confirmed | ❌ Refuted | ⚠️ Unverifiable
+   - Evidence: <file:line reference, test output, or verification notes>
+   - Recommendation: <how to fix, if not obvious>
+
+### Important (Should Fix)
+<same format>
+
+### Minor (Nice to Have)
+<same format>
+
+### Contradictions
+- **<topic>**: <Reviewer A> says X, <Reviewer B> says Y.
+  Verification found: <what the verifier determined, or "unresolvable">
+
+### Unverifiable Claims
+- "<claim>" (<reviewer>) — <why it couldn't be verified>
+
+### Verdict
+**Ready to merge?** Yes / No / With fixes
+**Reasoning:** <1-2 sentences based on the verified evidence>
+```
+
+**Synthesis rules:**
+- **Deduplicate.** Same issue from multiple reviewers = one entry, multiple attributions.
+- **Keep refuted claims.** Show them in their severity section so the user sees what was checked and dismissed.
+- **Assign severity from evidence.** A reviewer calling something "critical" that the verifier refuted → downgrade or keep with ❌ status.
+- **Omit empty sections.** If no Critical findings, skip that section entirely.
+- **Be honest about failures.** If a reviewer failed, say so in the header. Don't pretend you had 4 reviews when you had 3.
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add prompts/coordinator.md
+git commit -m "Add coordinator subagent prompt template"
+```
+
+---
+
+### Task 6: Skill Definition (SKILL.md)
+
+**Files:**
+- Create: `skills/committee/SKILL.md`
+
+- [ ] **Step 1: Write SKILL.md**
+
+The skill is a thin launcher. It parses user input, gathers git context, and dispatches the coordinator subagent. It does NOT read diffs, review code, or make scope judgments.
+
+```markdown
+---
+name: committee
+description: Run parallel code reviews from Claude, Codex, Kiro, and Gemini, verify claims, and synthesize a structured report. Use when you want a thorough multi-perspective review.
+---
+
+# Committee Code Review
+
+Run a multi-perspective code review using four AI reviewers in parallel.
+
+## Input Parsing
+
+The user invokes `/committee` with optional arguments. Parse them to determine review scope:
+
+1. Check for explicit flags:
+   - `--base <branch>` → branch diff
+   - `--commit <sha>` → single commit
+2. Check for PR reference:
+   - `#<number>` or a GitHub PR URL → PR review
+3. Check for freeform text:
+   - Anything else → pass as vague context
+4. No arguments:
+   - Auto-detect scope
+
+## Context Gathering
+
+Based on the parsed input, gather whatever concrete context you can. Run these commands as appropriate:
+
+**For auto-detect (no args):**
+```bash
+# Check for uncommitted changes
+git status --porcelain
+
+# Check current branch
+git rev-parse --abbrev-ref HEAD
+
+# If on a feature branch, get the diff stat
+git diff --stat main...HEAD 2>/dev/null || git diff --stat master...HEAD 2>/dev/null
+
+# Get recent commits
+git log --oneline -5
+```
+
+**For explicit git range:**
+```bash
+git diff --stat {base}...HEAD
+git rev-parse HEAD
+```
+
+**For PR:**
+```bash
+gh pr view {number} --json title,baseRefName,headRefName,body
+gh pr diff {number} --stat
+```
+
+**For vague input:** Don't try to resolve it. Pass the user's words through.
+
+## Dispatch Coordinator
+
+Read the coordinator prompt template at `prompts/coordinator.md`.
+
+Construct the `{REVIEW_CONTEXT}` section from what you gathered:
+
+```
+Scope: <what's being reviewed>
+Base SHA: <if known>
+Head SHA: <if known>
+Base branch: <if known>
+PR number: <if applicable>
+Diff stat: <if gathered>
+User's original input: <the raw args to /committee>
+```
+
+Dispatch a single subagent via the Agent tool:
+- Description: "Committee code review"
+- Prompt: The filled coordinator prompt
+- Run in foreground (you need the result)
+
+## Display Result
+
+The coordinator returns the final synthesized report. Display it directly to the user — it's already formatted as markdown.
+
+If the coordinator reports an abort (quorum not met), display that message instead.
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add skills/committee/SKILL.md
+git commit -m "Add /committee skill definition"
+```
+
+---
+
+### Task 7: Smoke Test
+
+This is not automated testing — it's a manual verification that the skill works end-to-end.
+
+- [ ] **Step 1: Verify prerequisites**
+
+```bash
+which codex && echo "codex: OK" || echo "codex: MISSING"
+which kiro-cli && echo "kiro-cli: OK" || echo "kiro-cli: MISSING"
+which gemini && echo "gemini: OK" || echo "gemini: MISSING"
+```
+
+All three must be present. If any are missing, install before proceeding.
+
+- [ ] **Step 2: Verify authentication**
+
+```bash
+# Codex — should not error
+codex review --commit HEAD 2>&1 | head -5
+
+# Kiro — should not error about auth
+kiro-cli chat --no-interactive "Say hello" 2>&1 | head -5
+
+# Gemini — should not error about auth
+gemini -p "Say hello" -o text 2>&1 | head -5
+```
+
+If any fail with auth errors, fix authentication before proceeding.
+
+- [ ] **Step 3: Run /committee against this repo**
+
+In a Claude Code session in the committee directory:
+
+```
+/committee --commit HEAD
+```
+
+This should:
+1. Parse `--commit HEAD` as a single-commit review
+2. Gather the HEAD commit SHA and diff stat
+3. Dispatch the coordinator subagent
+4. Coordinator dispatches 4 reviewers in parallel
+5. Coordinator dispatches verifier
+6. Coordinator synthesizes and returns the report
+
+Verify the output contains:
+- A `## Committee Code Review` header
+- Scope information
+- Reviewer attributions
+- Findings with verification status
+- A verdict
+
+- [ ] **Step 4: Test auto-detect mode**
+
+```
+/committee
+```
+
+On the main branch with no uncommitted changes, this should review the last commit (same as `--commit HEAD`).
+
+- [ ] **Step 5: Commit any fixes**
+
+If smoke testing revealed issues with the prompts, fix them and commit:
+
+```bash
+git add -A
+git commit -m "Fix issues found during smoke testing"
+```
