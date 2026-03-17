@@ -67,10 +67,10 @@ Four reviewers are dispatched simultaneously:
 
 | Reviewer | Mechanism | Prompt Style |
 |----------|-----------|--------------|
-| Claude | Agent tool, `superpowers:code-reviewer` subagent type | Uses existing code-reviewer prompt template with git range |
-| Codex | Bash: `codex review --base <sha>` or `codex review --commit <sha>` | Native review format, no custom prompt |
-| Kiro | Bash: `kiro-cli chat --no-interactive --trust-all-tools "<prompt>"` | Minimal context prompt (git range, what to review), native review style |
-| Gemini | Bash: `gemini code-review` or `gemini pr-code-review` | Uses code-review extension, native review style |
+| Claude | Agent tool, `superpowers:code-reviewer` subagent type | Uses existing code-reviewer prompt template with git range. This is a pre-existing capability in the superpowers plugin. |
+| Codex | Bash: `codex review --base <branch>` (branch diff) or `codex review --commit <sha>` (single commit) | Native review format, no custom prompt. Note: `--base` takes a branch name, not a SHA. |
+| Kiro | Bash: `kiro-cli chat --no-interactive "<prompt>"` | Minimal context prompt (git range, what to review), native review style. No `--trust-all-tools` — Kiro only needs to read code and produce text, not execute tools. |
+| Gemini | Bash: `gemini -p "<prompt>" -e code-review -y` | Non-interactive (`-p`), loads code-review extension (`-e`), auto-approves tool use (`-y`). The prompt asks Gemini to review the specified changes. |
 
 Each reviewer is left to its native review style. No standardized output format is imposed.
 
@@ -78,6 +78,8 @@ For Kiro and Gemini, the prompt provides:
 - The git range or PR reference
 - A brief description of what's being reviewed
 - No instructions on how to format the review — let the tool be itself
+
+Note on scope-to-CLI mapping: The coordinator translates the review scope into the appropriate CLI flags per tool. For example, a branch diff becomes `codex review --base main` but `kiro-cli chat --no-interactive "Review the changes between main and HEAD"`. This mapping logic lives in the coordinator prompt.
 
 ### Phase 2: Verify Claims
 
@@ -183,6 +185,7 @@ Notes:
 
 ## Error Handling
 
-- If a reviewer CLI fails (not installed, auth expired, timeout), the coordinator proceeds with the remaining reviewers and notes the failure in the report header.
-- If fewer than 2 reviewers succeed, the coordinator aborts and reports the failures to the user.
-- The verifier is not expected to be infallible — its judgment calls are surfaced transparently via the three-tier tagging system.
+- **Timeouts:** Each reviewer Bash invocation uses a 5-minute (300000ms) timeout. The Claude subagent reviewer has no explicit timeout (it runs via the Agent tool which manages its own lifecycle). If a reviewer times out, it is treated as a failure.
+- **Failures:** If a reviewer CLI fails (not installed, auth expired, timeout, crash), the coordinator proceeds with the remaining reviewers and notes the failure in the report header.
+- **Minimum quorum:** If fewer than 2 reviewers succeed, the coordinator aborts and reports the failures to the user rather than producing a low-confidence review.
+- **Verifier fallibility:** The verifier is not expected to be infallible — its judgment calls are surfaced transparently via the three-tier tagging system.
