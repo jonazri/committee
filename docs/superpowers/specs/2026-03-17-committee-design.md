@@ -69,8 +69,8 @@ Four reviewers are dispatched simultaneously:
 |----------|-----------|--------------|
 | Claude | Agent tool, `superpowers:code-reviewer` subagent type | Uses existing code-reviewer prompt template with git range. This is a pre-existing capability in the superpowers plugin. |
 | Codex | Bash: `codex review --base <branch>` (branch diff) or `codex review --commit <sha>` (single commit) | Native review format, no custom prompt. Note: `--base` takes a branch name, not a SHA. |
-| Kiro | Bash: `kiro-cli chat --no-interactive "<prompt>"` | Minimal context prompt (git range, what to review), native review style. No `--trust-all-tools` — Kiro only needs to read code and produce text, not execute tools. |
-| Gemini | Bash: `gemini -p "<prompt>" -e code-review -y` | Non-interactive (`-p`), loads code-review extension (`-e`), auto-approves tool use (`-y`). The prompt asks Gemini to review the specified changes. |
+| Kiro | Bash: `kiro-cli chat --no-interactive --trust-tools=fs_read "<prompt>"` | Minimal context prompt (git range, what to review), native review style. Trusts only `fs_read` so Kiro can read the codebase without hanging on approval prompts. |
+| Gemini | Bash: `gemini -p "<prompt>" -e code-review -y -o text` | Non-interactive (`-p`), loads code-review extension (`-e`), auto-approves tool use (`-y`), text output (`-o text`) to avoid ANSI noise. |
 
 Each reviewer is left to its native review style. No standardized output format is imposed.
 
