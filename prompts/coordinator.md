@@ -21,7 +21,7 @@ Dispatch all four reviewers in parallel. Use a single message with multiple tool
 
 ### Reviewer 1: Claude (superpowers:code-reviewer)
 
-Dispatch via Agent tool with `subagent_type: "superpowers:code-reviewer"`. Add to the prompt: "Write your complete review to `{SESSION_DIR}/claude.md` using the Write tool before returning."
+Dispatch via Agent tool with `subagent_type: "superpowers:code-reviewer"`.
 
 The prompt should follow the code-reviewer template pattern:
 - WHAT_WAS_IMPLEMENTED: The changes being reviewed
@@ -29,6 +29,8 @@ The prompt should follow the code-reviewer template pattern:
 - BASE_SHA: {BASE_SHA}
 - HEAD_SHA: {HEAD_SHA}
 - DESCRIPTION: {SCOPE_DESCRIPTION}
+
+**After the subagent returns**, write its response text to the temp file yourself using the Write tool: save it to `{SESSION_DIR}/claude.md`. Do not ask the subagent to write the file — it may not have Write tool permissions. The coordinator always controls file I/O.
 
 ### Reviewer 2: Codex
 
@@ -57,7 +59,7 @@ Read the prompt template at `prompts/reviewers/kiro.md`. Fill in the placeholder
 
 Dispatch via Bash tool with a 5-minute (300000ms) timeout. Pipe output to temp file:
 ```bash
-kiro-cli chat --no-interactive --trust-tools=fs_read "<filled prompt>" > {SESSION_DIR}/kiro.md 2>&1
+kiro-cli chat --no-interactive --trust-all-tools "<filled prompt>" > {SESSION_DIR}/kiro.md 2>&1
 ```
 
 ### Reviewer 4: Gemini
@@ -77,6 +79,7 @@ The skill has already resolved the review scope and provided it in `{REVIEW_CONT
 - **Scope type: commit** → `codex review --commit {COMMIT_SHA}`. For Kiro/Gemini, use `git show {COMMIT_SHA}`.
 - **Scope type: uncommitted** → `codex review --uncommitted`. For Kiro/Gemini, use `git diff` and `git diff --staged`.
 - **Scope type: pr** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, use `git diff {BASE_BRANCH}...{HEAD_BRANCH}` (both branch names are provided in {REVIEW_CONTEXT}).
+- **Scope type: sha_range (Base branch: none)** → `codex review` does not support raw SHA ranges via flags. Use stdin: `git diff {BASE_SHA}..{HEAD_SHA} | codex review - > {SESSION_DIR}/codex.md 2>&1`. (Codex accepts `-` as the PROMPT argument to read from stdin.)
 
 ## Phase 2: Verify Claims
 
@@ -104,11 +107,16 @@ For the Claude subagent, if the Agent tool returns an error, record it the same 
 **Successful reviews are not shown** — insufficient reviewer diversity for a reliable committee review.
 ```
 
-**If quorum met:** Check the size of each review before reading it into your context:
+**If quorum met:** Check the size of each review file individually before reading into your context:
 
 ```bash
-wc -l {SESSION_DIR}/claude.md {SESSION_DIR}/codex.md {SESSION_DIR}/kiro.md {SESSION_DIR}/gemini.md 2>/dev/null
+wc -l {SESSION_DIR}/claude.md 2>/dev/null
+wc -l {SESSION_DIR}/codex.md 2>/dev/null
+wc -l {SESSION_DIR}/kiro.md 2>/dev/null
+wc -l {SESSION_DIR}/gemini.md 2>/dev/null
 ```
+
+(Run per-file so the line count is unambiguously attributed to each reviewer, even if some files are missing.)
 
 **Context management:** For each review file:
 - **If the file is under 500 lines:** Read it directly into your context.

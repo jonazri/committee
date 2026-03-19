@@ -33,14 +33,19 @@ git status --porcelain
 # Check current branch
 git rev-parse --abbrev-ref HEAD
 
-# If on a feature branch, get the diff stat vs main/master
-git diff --stat main...HEAD 2>/dev/null || git diff --stat master...HEAD 2>/dev/null
+# Detect default branch dynamically
+git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||'
+# Falls back to: git remote show origin 2>/dev/null | grep 'HEAD branch' | awk '{print $NF}'
+# If neither works, fall back to trying main then master
+
+# If on a feature branch, get the diff stat vs default branch
+git diff --stat <default_branch>...HEAD
 
 # Get recent commits for context
 git log --oneline -5
 ```
 
-Auto-detect priority: uncommitted changes → branch diff from main/master → last commit.
+Auto-detect priority: uncommitted changes → branch diff from default branch → last commit.
 
 **For `--base <branch>`:**
 ```bash
@@ -58,6 +63,10 @@ git show --stat <sha>
 **For PR (`#123` or PR URL):**
 ```bash
 gh pr view <number> --json title,baseRefName,headRefName,url
+
+# Fetch the PR branch so git diff works locally
+gh pr checkout <number> --detach 2>/dev/null || git fetch origin "refs/pull/<number>/head:refs/pull/<number>/head"
+
 gh pr diff <number> --stat
 ```
 
