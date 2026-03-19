@@ -28,7 +28,7 @@ All four reviewer CLIs must be installed and authenticated:
 
 ## Project Structure
 
-- `skills/committee/SKILL.md` — The skill entry point (thin launcher)
+- `.claude/skills/committee/SKILL.md` — The skill entry point (installed here for Claude Code to discover it as `/committee`)
 - `prompts/coordinator.md` — Coordinator subagent prompt template
 - `prompts/verifier.md` — Verifier subagent prompt template
 - `prompts/reviewers/kiro.md` — Kiro review prompt (Kiro uses freeform chat, needs context)
