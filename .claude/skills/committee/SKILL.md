@@ -16,7 +16,7 @@ The user invokes `/committee` with optional arguments. Parse them to determine r
    - `--commit <sha>` → single commit
    - `--range <sha1>..<sha2>` → explicit SHA range
 2. Check for bare SHA range pattern (e.g. `abc123..def456` or `abc123...def456`):
-   - Matches `[0-9a-f]{6,40}\.\.\.[0-9a-f]{6,40}` → SHA range
+   - Matches `[0-9a-f]{6,40}\.\.\.?[0-9a-f]{6,40}` (two or three dots) → SHA range
 3. Check for PR reference:
    - `#<number>` or a GitHub PR URL → PR review
 4. Check for freeform text:

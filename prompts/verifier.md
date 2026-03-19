@@ -8,7 +8,7 @@ You are verifying claims made by code reviewers. Your job is to assess the valid
 
 Git range: `{BASE_SHA}..{HEAD_SHA}` (if available — the coordinator must resolve concrete SHAs before invoking the verifier, even for vague inputs)
 
-**Original review files:** `{SESSION_DIR}/` — contains `claude.md`, `codex.md`, `kiro.md`, `gemini.md`. If the reviews below were summarized by the coordinator, you can read the original files for full detail.
+**Original review files:** `{SESSION_DIR}/` — contains `claude.md`, `codex.md`, `kiro.md`, `gemini.md`. If the reviews below were summarized by the coordinator, you can read the original files for full detail. When a review was summarized, the summary may not contain every claim from the original — if a finding seems important but lacks evidence, check the original file before marking it Unverifiable.
 
 **Reviewer failures:** If a reviewer failed (timeout, auth error, crash), the coordinator will substitute `REVIEWER FAILED: <reason>` in place of the review output. Do not attempt to verify claims from a failed reviewer. Note the failure in your output but treat it as if that reviewer did not participate.
 
