@@ -12,6 +12,45 @@
 
 ---
 
+## Execution Status
+
+**Completed:** 2026-03-19
+
+### What's Done
+
+All 6 implementation tasks complete. Final commit: `88125d9`.
+
+| Task | File | Status |
+|------|------|--------|
+| 1 | `CLAUDE.md` | ✅ Done |
+| 2 | `prompts/reviewers/kiro.md` | ✅ Done |
+| 3 | `prompts/reviewers/gemini.md` | ✅ Done |
+| 4 | `prompts/verifier.md` | ✅ Done |
+| 5 | `prompts/coordinator.md` | ✅ Done |
+| 6 | `skills/committee/SKILL.md` | ✅ Done |
+| 7 | Smoke test | ⏳ Pending live session |
+
+### What's Remaining
+
+**Task 7 (Smoke Test):** The live end-to-end test requires a Claude Code session with the skill loaded. All three CLIs are authenticated (codex, kiro-cli, gemini). Run:
+```
+/committee --commit HEAD
+```
+Then verify the report contains: `## Committee Code Review` header, scope info, reviewer attributions, findings with verification status, and a verdict. Test auto-detect with `/committee`.
+
+### Deviations from Plan
+
+1. **Tasks 2–4 were batched into a single subagent invocation** — The plan defines them as separate tasks, but they were dispatched to one subagent since all three are independent file writes with no shared state. Each was still committed separately per the plan.
+
+2. **Extra fixes added during code quality review:**
+   - `prompts/verifier.md` — Added explicit `REVIEWER FAILED: <reason>` handling (reviewer flagged missing failure path)
+   - `CLAUDE.md` — Expanded Project Structure section to list kiro.md/gemini.md separately and clarify why Codex/Claude have no custom prompts
+   - `prompts/coordinator.md` — Context threshold made concrete (under/over 500 lines instead of "use judgment"); PR scope for Kiro/Gemini made explicit (`git diff {BASE_BRANCH}...{HEAD_BRANCH}`)
+
+3. **`{GIT_RANGE_INSTRUCTIONS}` kept as freeform placeholder** — A reviewer suggested replacing it with raw `{BASE_SHA}`/`{HEAD_SHA}` placeholders. Pushed back: the coordinator fills it with human-readable git commands (e.g. "Run `git diff main...HEAD`"), which is intentionally more helpful for Kiro/Gemini than raw SHAs.
+
+---
+
 ## File Structure
 
 ```
