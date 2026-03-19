@@ -49,17 +49,15 @@ Then verify the report contains: `## Committee Code Review` header, scope info, 
 
 3. **`{GIT_RANGE_INSTRUCTIONS}` kept as freeform placeholder** — A reviewer suggested replacing it with raw `{BASE_SHA}`/`{HEAD_SHA}` placeholders. Pushed back: the coordinator fills it with human-readable git commands (e.g. "Run `git diff main...HEAD`"), which is intentionally more helpful for Kiro/Gemini than raw SHAs.
 
-### Known Issues (deferred)
+### Known Issues (resolved 2026-03-19)
 
-Identified during first live run (`/committee` smoke test, 2026-03-19). Deferred — not blocking but should be revisited:
+Issues identified during first live run and addressed in subsequent commit:
 
-**Issue 3: Shell injection in Kiro/Gemini invocations** (`prompts/coordinator.md:60,69`)
-Reviewer prompts are interpolated inside double-quoted Bash strings. If `{SCOPE_DESCRIPTION}` or `{GIT_RANGE_INSTRUCTIONS}` contains shell metacharacters (double quotes, backticks, `$()`), the command could break or allow injection — e.g. a PR title like `fix "auth" bypass`.
-Fix: Write the filled prompt to a temp file and pass via `$(cat $PROMPT_FILE)`, or use `printf '%s'` escaping.
+**Issue 3: Shell injection in Kiro/Gemini invocations** — ✅ Fixed
+Coordinator now uses Write tool to write filled prompt to `$SESSION_DIR/kiro_prompt.txt` / `$SESSION_DIR/gemini_prompt.txt`, then reads via `$PROMPT=$(cat file)` / stdin redirect. Prompt content no longer inline in bash string.
 
-**Issue 4: Temp directory never cleaned up** (`prompts/coordinator.md`)
-`SESSION_DIR` is created at setup but `rm -rf "$SESSION_DIR"` is never called. Every run leaks a temp directory under `/tmp/committee-*`.
-Fix: Add cleanup at end of Phase 3, plus a trap for failure cases.
+**Issue 4: Temp directory never cleaned up** — ✅ Fixed
+Added `trap 'rm -rf "$SESSION_DIR"' EXIT` immediately after `mktemp`, plus explicit `rm -rf "$SESSION_DIR"` at end of Phase 3.
 
 ---
 

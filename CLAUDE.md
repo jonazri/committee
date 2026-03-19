@@ -23,7 +23,7 @@ All four reviewer CLIs must be installed and authenticated:
 /committee --base main                  # Review branch diff from main
 /committee --commit abc123              # Review specific commit
 /committee #123                         # Review PR #123
-/committee "review the auth changes"    # Vague — coordinator figures it out
+/committee "review the auth changes"    # Vague — skill resolves scope from git history
 ```
 
 ## Project Structure
@@ -33,6 +33,7 @@ All four reviewer CLIs must be installed and authenticated:
 - `prompts/verifier.md` — Verifier subagent prompt template
 - `prompts/reviewers/kiro.md` — Kiro review prompt (Kiro uses freeform chat, needs context)
 - `prompts/reviewers/gemini.md` — Gemini review prompt (Gemini uses freeform chat, needs context)
+- `prompts/summarizer.md` — Summarizer subagent prompt (used when a review exceeds 500 lines)
 - `docs/superpowers/specs/` — Design spec
 - `docs/superpowers/plans/` — Implementation plan
 

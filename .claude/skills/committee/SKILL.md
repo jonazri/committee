@@ -14,16 +14,27 @@ The user invokes `/committee` with optional arguments. Parse them to determine r
 1. Check for explicit flags:
    - `--base <branch>` → branch diff
    - `--commit <sha>` → single commit
-2. Check for PR reference:
+   - `--range <sha1>..<sha2>` → explicit SHA range
+2. Check for bare SHA range pattern (e.g. `abc123..def456` or `abc123...def456`):
+   - Matches `[0-9a-f]{6,40}\.\.\.[0-9a-f]{6,40}` → SHA range
+3. Check for PR reference:
    - `#<number>` or a GitHub PR URL → PR review
-3. Check for freeform text:
+4. Check for freeform text:
    - Anything else → treat as vague context, resolve below
-4. No arguments:
+5. No arguments:
    - Auto-detect scope
 
 ## Context Gathering
 
 You are the single source of truth for review scope. Resolve the input to concrete git context before dispatching the coordinator. The coordinator does not re-resolve scope.
+
+**For `--range <sha1>..<sha2>` or bare SHA range:**
+```bash
+git rev-parse <sha1>           # resolve to full SHA
+git rev-parse <sha2>           # resolve to full SHA
+git diff --stat <sha1>..<sha2>
+```
+Scope type: sha_range, Base branch: none.
 
 **For auto-detect (no args):**
 ```bash
@@ -33,10 +44,11 @@ git status --porcelain
 # Check current branch
 git rev-parse --abbrev-ref HEAD
 
-# Detect default branch dynamically
+# Detect default branch — try local refs first (fast, no network)
+git rev-parse --verify main >/dev/null 2>&1 && echo "main" || \
+git rev-parse --verify master >/dev/null 2>&1 && echo "master" || \
 git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||'
-# Falls back to: git remote show origin 2>/dev/null | grep 'HEAD branch' | awk '{print $NF}'
-# If neither works, fall back to trying main then master
+# Only fall back to network-dependent git remote show origin if all else fails
 
 # If on a feature branch, get the diff stat vs default branch
 git diff --stat <default_branch>...HEAD
@@ -88,7 +100,7 @@ Read the coordinator prompt template at `prompts/coordinator.md`.
 Construct the `{REVIEW_CONTEXT}` section from the resolved context:
 
 ```
-Scope type: <branch_diff | commit | uncommitted | pr>
+Scope type: <branch_diff | commit | uncommitted | pr | sha_range>
 Scope: <human-readable description>
 Base SHA: <resolved SHA or "none" for uncommitted>
 Head SHA: <resolved SHA>
