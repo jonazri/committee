@@ -34,8 +34,8 @@ User session
 ### Responsibilities
 
 1. Parse user input to understand review scope
-2. Gather whatever context is available (SHAs, branch, PR metadata, diff stats)
-3. Dispatch coordinator subagent with a constructed prompt
+2. **Resolve the review scope to concrete git context** — this is the skill's primary job and the single source of truth for scope. The coordinator does not re-resolve scope; it trusts what the skill provides.
+3. Dispatch coordinator subagent with a constructed prompt containing the resolved context
 4. Display the coordinator's final report in the user's session
 
 ### Input Handling
@@ -48,7 +48,7 @@ The skill accepts freeform arguments and interprets them flexibly:
 - `/committee #123` or `/committee <PR URL>` — PR review. Uses `gh pr diff` to get the changes.
 - `/committee "review the auth middleware changes"` — Vague context. The skill extracts what it can and passes the user's intent to the coordinator, which resolves the scope itself.
 
-The skill does not force resolution of vague inputs. If it can extract concrete context (SHAs, diff stats), it does. Otherwise, it passes the user's words through and lets the coordinator figure it out.
+The skill always resolves to concrete git context before dispatching the coordinator. Even for vague inputs like "review the auth changes," the skill determines the relevant SHAs, branch, and diff stat. The coordinator never re-resolves scope — it trusts the skill's resolution and focuses on dispatching reviewers with the provided context.
 
 ### What the Skill Does NOT Do
 
@@ -79,16 +79,18 @@ For Kiro and Gemini, the prompt provides:
 - A brief description of what's being reviewed
 - No instructions on how to format the review — let the tool be itself
 
-Note on scope-to-CLI mapping: The coordinator translates the review scope into the appropriate CLI flags per tool. For example, a branch diff becomes `codex review --base main` but `kiro-cli chat --no-interactive "Review the changes between main and HEAD"`. This mapping logic lives in the coordinator prompt.
+Note on scope-to-CLI mapping: The coordinator maps the skill-provided context (SHAs, branch, scope type) to the appropriate CLI flags per tool. For example, a branch diff becomes `codex review --base main` but `kiro-cli chat --no-interactive "Review the changes between main and HEAD"`. The coordinator does not determine *what* to review — only *how* to invoke each tool with the scope the skill already resolved.
 
 ### Phase 2: Verify Claims
 
 After all 4 reviews return, the coordinator dispatches a verifier subagent.
 
 **Verifier input:**
-- All 4 raw review outputs (verbatim)
+- All 4 review outputs (truncated to ~500 lines each if longer — preserve the beginning and end, note truncation)
 - The git range or review scope
 - Full tool access (Read, Bash, Grep, Glob, etc.)
+
+**Context budget:** Four full reviews of a non-trivial diff can be substantial. To prevent context overflow, the coordinator truncates any review exceeding ~500 lines before passing it to the verifier. The truncation preserves the first 400 lines and last 100 lines, inserting a `[... N lines truncated ...]` marker. The verifier can use its tool access to re-read the original review output if needed for specific claims.
 
 **Verifier process:**
 
@@ -185,7 +187,7 @@ Notes:
 
 ## Error Handling
 
-- **Timeouts:** Each reviewer Bash invocation uses a 5-minute (300000ms) timeout. The Claude subagent reviewer has no explicit timeout (it runs via the Agent tool which manages its own lifecycle). If a reviewer times out, it is treated as a failure.
-- **Failures:** If a reviewer CLI fails (not installed, auth expired, timeout, crash), the coordinator proceeds with the remaining reviewers and notes the failure in the report header.
+- **Timeouts:** Each reviewer Bash invocation uses a 5-minute (300000ms) timeout. The Claude subagent reviewer has no explicit timeout (it runs via the Agent tool which manages its own lifecycle). If a Bash tool call returns a timeout error (non-zero exit code or timeout signal), the coordinator must capture that as a reviewer failure — record the reviewer name and "timed out after 5 minutes" as the failure reason. Do not retry.
+- **Failures:** Any reviewer that produces a non-zero exit code, timeout, empty output, or an error message instead of a review is treated as failed. The coordinator proceeds with the remaining reviewers and notes each failure (reviewer name + reason) in the report header.
 - **Minimum quorum:** If fewer than 2 reviewers succeed, the coordinator aborts and reports the failures to the user rather than producing a low-confidence review.
 - **Verifier fallibility:** The verifier is not expected to be infallible — its judgment calls are surfaced transparently via the three-tier tagging system.

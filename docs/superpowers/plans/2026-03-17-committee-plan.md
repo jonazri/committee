@@ -340,20 +340,25 @@ Dispatch via Bash tool with a 5-minute (300000ms) timeout:
 gemini -p "<filled prompt>" -e code-review -y -o text
 ```
 
-### Handling Scope
+### Mapping Scope to CLI Flags
 
-The review context may be precise or vague. Adapt:
+The skill has already resolved the review scope and provided it in `{REVIEW_CONTEXT}`. Do NOT re-resolve scope. Map the provided context to each tool's CLI flags:
 
-- **Git range provided (base + head SHAs):** Use directly. Map to each tool's flags.
-- **Branch name provided:** Use as-is for `codex review --base <branch>`. For others, determine the diff range with `git merge-base <branch> HEAD` and `git rev-parse HEAD`.
-- **PR number/URL provided:** Use `gh pr diff <number>` to get the diff. Use `gh pr view <number> --json baseRefName,headRefName` to get branch names for codex.
-- **Commit SHA provided:** Use `codex review --commit <sha>`. For others, use `git show <sha>` context.
-- **Vague description:** Figure out the scope yourself. Read recent git log, check branch state, look for relevant files. Then proceed with whatever you determine.
-- **No context at all:** Check for uncommitted changes first. Then check if on a feature branch (not main/master). Then fall back to last commit.
+- **Scope type: branch_diff** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini prompts, reference `git diff {BASE_BRANCH}...HEAD`.
+- **Scope type: commit** → `codex review --commit {COMMIT_SHA}`. For Kiro/Gemini, reference `git show {COMMIT_SHA}`.
+- **Scope type: uncommitted** → `codex review --uncommitted`. For Kiro/Gemini, reference `git diff` (unstaged) and `git diff --staged`.
+- **Scope type: pr** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, reference the PR diff.
 
 ## Phase 2: Verify Claims
 
 After all reviewers return (or timeout/fail), collect the results.
+
+**Handling failures explicitly:** For each Bash reviewer (Codex, Kiro, Gemini), check the result:
+- Non-zero exit code → failure. Record: "<Reviewer>: exited with code N"
+- Timeout (Bash tool returns timeout error) → failure. Record: "<Reviewer>: timed out after 5 minutes"
+- Empty output → failure. Record: "<Reviewer>: returned empty output"
+- Error message instead of review content → failure. Record: "<Reviewer>: <first line of error>"
+For the Claude subagent, if the Agent tool returns an error, record it the same way.
 
 **Check quorum:** If fewer than 2 reviewers succeeded, STOP. Report the failures to the user:
 
@@ -369,13 +374,17 @@ After all reviewers return (or timeout/fail), collect the results.
 **Successful reviews are not shown** — insufficient reviewer diversity for a reliable committee review.
 ```
 
-**If quorum met:** Read the verifier prompt template at `prompts/verifier.md`. Fill in:
+**If quorum met:** Before passing reviews to the verifier, apply context budget management:
+
+**Truncation rule:** If any review exceeds ~500 lines, truncate it: keep the first 400 lines and last 100 lines, insert `[... N lines truncated ...]` in between. The verifier has full tool access and can re-examine code directly if a truncated section is relevant.
+
+Read the verifier prompt template at `prompts/verifier.md`. Fill in:
 - `{SCOPE_DESCRIPTION}` — same as what you gave reviewers
 - `{BASE_SHA}` and `{HEAD_SHA}` — the git range
-- `{CLAUDE_REVIEW}` — Claude's raw review output (or "REVIEWER FAILED: <reason>" if it failed)
-- `{CODEX_REVIEW}` — Codex's raw review output (or failure note)
-- `{KIRO_REVIEW}` — Kiro's raw review output (or failure note)
-- `{GEMINI_REVIEW}` — Gemini's raw review output (or failure note)
+- `{CLAUDE_REVIEW}` — Claude's review output, truncated if needed (or "REVIEWER FAILED: <reason>" if it failed)
+- `{CODEX_REVIEW}` — Codex's review output, truncated if needed (or failure note)
+- `{KIRO_REVIEW}` — Kiro's review output, truncated if needed (or failure note)
+- `{GEMINI_REVIEW}` — Gemini's review output, truncated if needed (or failure note)
 
 Dispatch the verifier as a subagent via the Agent tool. Wait for it to return.
 
@@ -442,7 +451,7 @@ git commit -m "Add coordinator subagent prompt template"
 
 - [ ] **Step 1: Write SKILL.md**
 
-The skill is a thin launcher. It parses user input, gathers git context, and dispatches the coordinator subagent. It does NOT read diffs, review code, or make scope judgments.
+The skill is the single source of truth for review scope. It parses user input, resolves it to concrete git context (SHAs, branch, scope type), and dispatches the coordinator with that resolved context. The coordinator never re-resolves scope.
 
 ```markdown
 ---
@@ -499,21 +508,32 @@ gh pr view {number} --json title,baseRefName,headRefName,body
 gh pr diff {number} --stat
 ```
 
-**For vague input:** Don't try to resolve it. Pass the user's words through.
+**For vague input (e.g., "review the auth changes"):**
+```bash
+# You must resolve this to concrete git context. Use the description to find relevant commits:
+git log --oneline --all --grep="auth" | head -10
+# Or look at recently changed files:
+git log --oneline -10 --name-only
+# Then determine the appropriate scope type (branch_diff, commit, etc.) and resolve SHAs
+```
+
+**Always resolve to concrete context.** The coordinator does not re-resolve scope — it trusts what you provide.
 
 ## Dispatch Coordinator
 
 Read the coordinator prompt template at `prompts/coordinator.md`.
 
-Construct the `{REVIEW_CONTEXT}` section from what you gathered:
+Construct the `{REVIEW_CONTEXT}` section from the resolved context:
 
 ```
-Scope: <what's being reviewed>
-Base SHA: <if known>
-Head SHA: <if known>
-Base branch: <if known>
+Scope type: <branch_diff | commit | uncommitted | pr>
+Scope: <human-readable description>
+Base SHA: <resolved SHA>
+Head SHA: <resolved SHA>
+Base branch: <branch name, if applicable>
 PR number: <if applicable>
-Diff stat: <if gathered>
+Diff stat:
+<output of git diff --stat>
 User's original input: <the raw args to /committee>
 ```
 
