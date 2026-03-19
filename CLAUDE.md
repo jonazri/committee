@@ -31,6 +31,9 @@ All four reviewer CLIs must be installed and authenticated:
 - `skills/committee/SKILL.md` — The skill entry point (thin launcher)
 - `prompts/coordinator.md` — Coordinator subagent prompt template
 - `prompts/verifier.md` — Verifier subagent prompt template
-- `prompts/reviewers/` — Prompt templates for Kiro and Gemini
+- `prompts/reviewers/kiro.md` — Kiro review prompt (Kiro uses freeform chat, needs context)
+- `prompts/reviewers/gemini.md` — Gemini review prompt (Gemini uses freeform chat, needs context)
 - `docs/superpowers/specs/` — Design spec
 - `docs/superpowers/plans/` — Implementation plan
+
+Note: Claude uses the `superpowers:code-reviewer` subagent type (no custom prompt needed). Codex uses `codex review` with its built-in format (no custom prompt needed). Only Kiro and Gemini need prompt templates because they're invoked via freeform CLI.

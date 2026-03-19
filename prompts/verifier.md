@@ -10,6 +10,8 @@ Git range: `{BASE_SHA}..{HEAD_SHA}` (if available — the coordinator must resol
 
 **Original review files:** `{SESSION_DIR}/` — contains `claude.md`, `codex.md`, `kiro.md`, `gemini.md`. If the reviews below were summarized by the coordinator, you can read the original files for full detail.
 
+**Reviewer failures:** If a reviewer failed (timeout, auth error, crash), the coordinator will substitute `REVIEWER FAILED: <reason>` in place of the review output. Do not attempt to verify claims from a failed reviewer. Note the failure in your output but treat it as if that reviewer did not participate.
+
 ## Reviewer Outputs
 
 ### Claude Review
