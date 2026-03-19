@@ -181,6 +181,8 @@ You are verifying claims made by code reviewers. Your job is to assess the valid
 
 Git range: `{BASE_SHA}..{HEAD_SHA}` (if available — the coordinator must resolve concrete SHAs before invoking the verifier, even for vague inputs)
 
+**Original review files:** `{SESSION_DIR}/` — contains `claude.md`, `codex.md`, `kiro.md`, `gemini.md`. If the reviews below were summarized by the coordinator, you can read the original files for full detail.
+
 ## Reviewer Outputs
 
 ### Claude Review
@@ -282,17 +284,22 @@ You are the coordinator for a multi-perspective code review. You will orchestrat
 
 {REVIEW_CONTEXT}
 
+## Setup
+
+First, create a temp directory for this review session:
+```bash
+SESSION_DIR=$(mktemp -d /tmp/committee-XXXXXX)
+```
+
+All reviewer outputs will be written to files in this directory rather than returned directly into your context. This gives you control over context management.
+
 ## Phase 1: Dispatch Reviewers
 
-Dispatch all four reviewers in parallel. Use a single message with multiple tool calls.
+Dispatch all four reviewers in parallel. Use a single message with multiple tool calls. Each reviewer writes output to a temp file.
 
 ### Reviewer 1: Claude (superpowers:code-reviewer)
 
-Dispatch via Agent tool with `subagent_type: "superpowers:code-reviewer"`. Use this prompt:
-
-```
-{CLAUDE_REVIEWER_PROMPT}
-```
+Dispatch via Agent tool with `subagent_type: "superpowers:code-reviewer"`. Add to the prompt: "Write your complete review to `{SESSION_DIR}/claude.md` using the Write tool before returning."
 
 The prompt should follow the code-reviewer template pattern:
 - WHAT_WAS_IMPLEMENTED: The changes being reviewed
@@ -303,21 +310,21 @@ The prompt should follow the code-reviewer template pattern:
 
 ### Reviewer 2: Codex
 
-Dispatch via Bash tool with a 5-minute (300000ms) timeout:
+Dispatch via Bash tool with a 5-minute (300000ms) timeout. Pipe output to temp file:
 
 For branch diff:
 ```bash
-codex review --base {BASE_BRANCH}
+codex review --base {BASE_BRANCH} > {SESSION_DIR}/codex.md 2>&1
 ```
 
 For single commit:
 ```bash
-codex review --commit {COMMIT_SHA}
+codex review --commit {COMMIT_SHA} > {SESSION_DIR}/codex.md 2>&1
 ```
 
 For uncommitted changes:
 ```bash
-codex review --uncommitted
+codex review --uncommitted > {SESSION_DIR}/codex.md 2>&1
 ```
 
 ### Reviewer 3: Kiro
@@ -326,18 +333,18 @@ Read the prompt template at `prompts/reviewers/kiro.md`. Fill in the placeholder
 - `{SCOPE_DESCRIPTION}` — describe the changes
 - `{GIT_RANGE_INSTRUCTIONS}` — tell Kiro what git command to run
 
-Dispatch via Bash tool with a 5-minute (300000ms) timeout:
+Dispatch via Bash tool with a 5-minute (300000ms) timeout. Pipe output to temp file:
 ```bash
-kiro-cli chat --no-interactive --trust-tools=fs_read "<filled prompt>"
+kiro-cli chat --no-interactive --trust-tools=fs_read "<filled prompt>" > {SESSION_DIR}/kiro.md 2>&1
 ```
 
 ### Reviewer 4: Gemini
 
 Read the prompt template at `prompts/reviewers/gemini.md`. Fill in the placeholders (same as Kiro).
 
-Dispatch via Bash tool with a 5-minute (300000ms) timeout:
+Dispatch via Bash tool with a 5-minute (300000ms) timeout. Pipe output to temp file:
 ```bash
-gemini -p "<filled prompt>" -e code-review -y -o text
+gemini -p "<filled prompt>" -e code-review -y -o text > {SESSION_DIR}/gemini.md 2>&1
 ```
 
 ### Mapping Scope to CLI Flags
@@ -374,17 +381,26 @@ For the Claude subagent, if the Agent tool returns an error, record it the same 
 **Successful reviews are not shown** — insufficient reviewer diversity for a reliable committee review.
 ```
 
-**If quorum met:** Before passing reviews to the verifier, apply context budget management:
+**If quorum met:** Check the size of each review before reading it into your context:
 
-**Truncation rule:** If any review exceeds ~500 lines, truncate it: keep the first 400 lines and last 100 lines, insert `[... N lines truncated ...]` in between. The verifier has full tool access and can re-examine code directly if a truncated section is relevant.
+```bash
+wc -l {SESSION_DIR}/claude.md {SESSION_DIR}/codex.md {SESSION_DIR}/kiro.md {SESSION_DIR}/gemini.md 2>/dev/null
+```
+
+**Context management:** For each review file:
+- **Default (most reviews):** Read the file directly into your context. Most reviews will be a reasonable size.
+- **If a review is large** (use your judgment, but ~500+ lines is a signal): Dispatch a summarizer subagent instead. Give it the file path and ask it to return a condensed summary that preserves all concrete claims, findings, and recommendations while removing verbose explanations.
 
 Read the verifier prompt template at `prompts/verifier.md`. Fill in:
 - `{SCOPE_DESCRIPTION}` — same as what you gave reviewers
 - `{BASE_SHA}` and `{HEAD_SHA}` — the git range
-- `{CLAUDE_REVIEW}` — Claude's review output, truncated if needed (or "REVIEWER FAILED: <reason>" if it failed)
-- `{CODEX_REVIEW}` — Codex's review output, truncated if needed (or failure note)
-- `{KIRO_REVIEW}` — Kiro's review output, truncated if needed (or failure note)
-- `{GEMINI_REVIEW}` — Gemini's review output, truncated if needed (or failure note)
+- `{CLAUDE_REVIEW}` — review content (read directly or summarized) or "REVIEWER FAILED: <reason>"
+- `{CODEX_REVIEW}` — same
+- `{KIRO_REVIEW}` — same
+- `{GEMINI_REVIEW}` — same
+
+Also provide the temp file paths to the verifier so it can read original reviews if needed:
+- `{SESSION_DIR}` — the temp directory containing all review files
 
 Dispatch the verifier as a subagent via the Agent tool. Wait for it to return.
 

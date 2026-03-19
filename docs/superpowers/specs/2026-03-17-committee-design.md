@@ -85,12 +85,15 @@ Note on scope-to-CLI mapping: The coordinator maps the skill-provided context (S
 
 After all 4 reviews return, the coordinator dispatches a verifier subagent.
 
+**Review output handling:** Each reviewer writes its output to a temp file (e.g., `/tmp/committee-<session>/claude.md`, `codex.md`, `kiro.md`, `gemini.md`) rather than returning it directly into the coordinator's context. This gives the coordinator control over context management.
+
+Before reading a review into context, the coordinator checks its line count (`wc -l`). The default assumption is that reviews are small enough to read directly. If a review is large (coordinator's judgment, but ~500 lines is a reasonable threshold), the coordinator dispatches a summarizer subagent to produce a condensed version instead of reading the full review into its own context. The summarizer gets the file path and returns a summary.
+
 **Verifier input:**
-- All 4 review outputs (truncated to ~500 lines each if longer — preserve the beginning and end, note truncation)
+- All 4 review outputs (read from temp files — full or summarized, depending on coordinator's judgment)
 - The git range or review scope
 - Full tool access (Read, Bash, Grep, Glob, etc.)
-
-**Context budget:** Four full reviews of a non-trivial diff can be substantial. To prevent context overflow, the coordinator truncates any review exceeding ~500 lines before passing it to the verifier. The truncation preserves the first 400 lines and last 100 lines, inserting a `[... N lines truncated ...]` marker. The verifier can use its tool access to re-read the original review output if needed for specific claims.
+- The temp file paths, so the verifier can read original reviews directly if needed
 
 **Verifier process:**
 
