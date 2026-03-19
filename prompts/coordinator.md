@@ -76,7 +76,7 @@ The skill has already resolved the review scope and provided it in `{REVIEW_CONT
 - **Scope type: branch_diff** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, use `git diff {BASE_BRANCH}...HEAD`.
 - **Scope type: commit** → `codex review --commit {COMMIT_SHA}`. For Kiro/Gemini, use `git show {COMMIT_SHA}`.
 - **Scope type: uncommitted** → `codex review --uncommitted`. For Kiro/Gemini, use `git diff` and `git diff --staged`.
-- **Scope type: pr** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, reference the PR diff.
+- **Scope type: pr** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, use `git diff {BASE_BRANCH}...{HEAD_BRANCH}` (both branch names are provided in {REVIEW_CONTEXT}).
 
 ## Phase 2: Verify Claims
 
@@ -111,8 +111,8 @@ wc -l {SESSION_DIR}/claude.md {SESSION_DIR}/codex.md {SESSION_DIR}/kiro.md {SESS
 ```
 
 **Context management:** For each review file:
-- **Default (most reviews):** Read the file directly into your context. Most reviews will be a reasonable size.
-- **If a review is large** (use your judgment, but ~500+ lines is a signal): Dispatch a summarizer subagent instead. Give it the file path and ask it to return a condensed summary that preserves all concrete claims, findings, and recommendations while removing verbose explanations.
+- **If the file is under 500 lines:** Read it directly into your context.
+- **If the file is 500 lines or more:** Dispatch a summarizer subagent instead. Give it the file path and ask it to return a condensed summary that preserves all concrete claims, findings, and recommendations while removing verbose explanations.
 
 Read the verifier prompt template at `prompts/verifier.md`. Fill in:
 - `{SCOPE_DESCRIPTION}` — same as what you gave reviewers
