@@ -2,7 +2,7 @@
 
 You are the coordinator for a multi-perspective code review. You will orchestrate four parallel code reviews, verify their claims, and synthesize a single structured report.
 
-> **Notation:** `{REVIEW_CONTEXT}` below is a template placeholder filled in before this prompt reaches you. All other `{UPPERCASE}` tokens (e.g. `{BASE_SHA}`, `{HEAD_SHA}`, `{SESSION_DIR}`) are **runtime references** — values you extract from the REVIEW_CONTEXT section or variables you create yourself. They are not filled in for you; you resolve them.
+> **Notation:** `{REVIEW_CONTEXT}` is a template placeholder filled in before this prompt reaches you. All other `{UPPERCASE}` tokens (e.g. `{BASE_SHA}`, `{HEAD_SHA}`, `{SESSION_DIR}`) are **runtime references** — values you extract from REVIEW_CONTEXT or variables you create yourself. The lowercase `{placeholders}` in the synthesis template (e.g. `{scope_description}`, `{base_sha}`) are also runtime values you fill in when writing the final report. None of these are filled in for you.
 
 ## Review Context
 
@@ -39,7 +39,7 @@ The prompt should follow the code-reviewer template pattern:
 
 ### Reviewer 2: Codex
 
-Dispatch via Bash tool with a 5-minute (300000ms) timeout. Pipe output to temp file:
+Dispatch via Bash tool with a **10-minute (600000ms) timeout**. Codex uses gpt-5.4 with xhigh reasoning and is slow — small commits take ~5 minutes. Pipe output to temp file:
 
 For branch diff:
 ```bash
@@ -54,6 +54,11 @@ codex review --commit {COMMIT_SHA} > "{SESSION_DIR}/codex.md" 2>&1
 For uncommitted changes:
 ```bash
 codex review --uncommitted > "{SESSION_DIR}/codex.md" 2>&1
+```
+
+For sha_range (multi-commit range): Codex has no native SHA range support and the stdin workaround (`codex review -`) is broken — it treats stdin as custom instructions, not as the diff to review. Skip Codex and write a failure note:
+```bash
+echo "REVIEWER FAILED: Codex does not support multi-commit SHA ranges" > "{SESSION_DIR}/codex.md"
 ```
 
 ### Reviewer 3: Kiro
@@ -91,7 +96,7 @@ The skill has already resolved the review scope and provided it in `{REVIEW_CONT
 - **Scope type: commit** → `codex review --commit {COMMIT_SHA}`. For Kiro/Gemini, use `git show {COMMIT_SHA}`.
 - **Scope type: uncommitted** → `codex review --uncommitted`. For Kiro/Gemini, use `git diff` and `git diff --staged`.
 - **Scope type: pr** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, use `git diff {BASE_BRANCH}...{HEAD_BRANCH}` (both branch names are provided in {REVIEW_CONTEXT}).
-- **Scope type: sha_range (Base branch: none)** → `codex review` does not support raw SHA ranges via flags. Use stdin: `git diff {BASE_SHA}..{HEAD_SHA} | codex review - > "{SESSION_DIR}/codex.md" 2>&1`. (Codex accepts `-` as the PROMPT argument to read from stdin.)
+- **Scope type: sha_range (Base branch: none)** → Codex does not support SHA ranges. Write `REVIEWER FAILED: Codex does not support multi-commit SHA ranges` to the codex temp file and proceed with the other three reviewers.
 
 ## Phase 2: Verify Claims
 
@@ -138,8 +143,8 @@ Read the verifier prompt template at `prompts/verifier.md`. Fill in:
 - `{SCOPE_DESCRIPTION}` — same as what you gave reviewers
 - `{BASE_SHA}` and `{HEAD_SHA}` — the git range
 - `{SESSION_DIR}` — the temp directory path
-- `{CLAUDE_REVIEW}` — review content (read directly or summarized) or "REVIEWER FAILED: <reason>"
-- `{CODEX_REVIEW}` — same
+- `{CLAUDE_REVIEW}` — review content or "REVIEWER FAILED: <reason>". If summarized, prepend `[SUMMARIZED — original at {SESSION_DIR}/claude.md]`
+- `{CODEX_REVIEW}` — same (mark `[SUMMARIZED]` if applicable)
 - `{KIRO_REVIEW}` — same
 - `{GEMINI_REVIEW}` — same
 

@@ -42,7 +42,9 @@ Note: Claude uses the `superpowers:code-reviewer` subagent type (no custom promp
 
 ## Known Limitations
 
-**Codex reliability** — Codex has been flaky in testing (Rust panics, process kills). Its review output is captured when it completes, but Codex may fail silently. The minimum quorum of 2 reviewers means the run still succeeds with 3 others.
+**Codex slowness** — Codex uses `gpt-5.4` with `xhigh` reasoning effort and takes ~5–10 minutes even for small diffs. The coordinator allows 10 minutes. For large diffs, Codex may still time out — the other 3 reviewers maintain quorum.
+
+**Codex sha_range limitation** — Codex has no native support for reviewing arbitrary SHA ranges (only `--base <branch>`, `--commit <sha>`, or `--uncommitted`). The stdin workaround (`codex review -`) passes the diff as instructions, not as the code to review, and produces empty output. For sha_range scope, Codex is automatically skipped.
 
 **Kiro network dependency** — Kiro connects to an external AWS service (`q.us-east-1.amazonaws.com`). It will fail with a network error in offline environments or if that service is unavailable. Treat Kiro as best-effort.
 
