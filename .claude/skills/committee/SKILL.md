@@ -160,8 +160,16 @@ Dispatch a single subagent via the Agent tool:
 - Prompt: The coordinator prompt with {REVIEW_CONTEXT} filled in
 - Run in foreground (you need the result to display to the user)
 
-## Display Result
+## Evaluate and Display Result
 
-The coordinator returns the final synthesized report. Display it directly to the user — it is already formatted as markdown.
+Before presenting the coordinator's report to the user, apply `superpowers:receiving-code-review` to evaluate the findings:
 
-If the coordinator reports an abort (quorum not met), display that message instead.
+```
+Skill tool: superpowers:receiving-code-review
+```
+
+This will guide you to treat the committee report as external reviewer feedback — verify technical claims against the actual codebase, check whether findings hold for this specific project, and flag any suggestions that seem questionable (e.g. YAGNI concerns, missing context, technically incorrect for this stack). Do not performatively accept all findings; evaluate each one.
+
+After evaluation, present the report to the user with any technically unsound or questionable findings annotated with your assessment (e.g. a brief note that a finding may not apply, or that a claim was verified in the codebase and holds).
+
+If the coordinator reports an abort (quorum not met), display that message instead — no evaluation needed.
