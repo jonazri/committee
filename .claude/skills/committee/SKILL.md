@@ -99,6 +99,33 @@ Always resolve to concrete SHAs. If you cannot resolve the scope, tell the user 
 
 > "Could not identify relevant commits for 'auth changes'. Recent commits: [list from git log --oneline -5]. Did you mean one of these? You can also use `/committee --commit <sha>` or `/committee --base <branch>` to be explicit."
 
+## Setup
+
+Create a temp directory for reviewer outputs. The skill creates this — not the coordinator — because the Claude reviewer is dispatched here.
+
+```bash
+SESSION_DIR=$(mktemp -d /tmp/committee-XXXXXX) && echo "$SESSION_DIR"
+```
+
+Note the SESSION_DIR path. You will write Claude's review here and pass it to the coordinator.
+
+## Dispatch Claude Reviewer
+
+The skill runs at the top level of the Claude Code session where `superpowers:code-reviewer` is available. Dispatch it here, before the coordinator, so the coordinator doesn't need plugin access.
+
+Dispatch via Agent tool with `subagent_type: "superpowers:code-reviewer"`:
+- WHAT_WAS_IMPLEMENTED: The changes being reviewed (use the scope description)
+- PLAN_OR_REQUIREMENTS: Check the user's original input for a spec or plan file path. If referenced, use it. Otherwise: "General code review — no specific plan".
+- BASE_SHA: The resolved base SHA (omit for uncommitted scope)
+- HEAD_SHA: The resolved head SHA
+- DESCRIPTION: Human-readable scope description
+
+**Uncommitted scope:** Omit BASE_SHA/HEAD_SHA and describe the uncommitted changes in WHAT_WAS_IMPLEMENTED instead.
+
+**Fallback:** If the Agent tool returns an error (plugin not available), dispatch `general-purpose` instead with the prompt template at `prompts/reviewers/claude.md`, filling in the same placeholders.
+
+**After the subagent returns:** Write its response to `$SESSION_DIR/claude.md` using the Write tool. Record whether this succeeded or failed.
+
 ## Dispatch Coordinator
 
 Read the coordinator prompt template at `prompts/coordinator.md`.
@@ -114,6 +141,8 @@ Base branch: <branch name, if applicable>
 PR number: <if applicable>
 Diff stat:
 <output of the diff --stat command>
+Session dir: <the SESSION_DIR path>
+Claude review: <"ready" if claude.md was written successfully, or "REVIEWER FAILED: <reason>">
 User's original input: <the raw args passed to /committee>
 ```
 

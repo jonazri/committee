@@ -39,7 +39,7 @@ All four reviewer CLIs must be installed and authenticated:
 - `docs/superpowers/specs/` — Design spec
 - `docs/superpowers/plans/` — Implementation plan
 
-Note: Claude uses `prompts/reviewers/claude.md` (a vendored copy of the superpowers code-reviewer prompt), dispatched as a `general-purpose` subagent — plugin-defined subagent types are not available in nested subagent contexts. To sync with a superpowers update, compare `prompts/reviewers/claude.md` against the installed code-reviewer at `~/.claude/plugins/cache/claude-plugins-official/superpowers/<version>/agents/code-reviewer.md`. Codex uses `codex review` (branch/commit/uncommitted) or `codex exec` (sha_range). Only Kiro and Gemini need separate reviewer prompt templates because they're invoked via freeform CLI.
+Note: Claude is dispatched by the skill (top-level, has plugin access) using `superpowers:code-reviewer` directly — not by the coordinator. The coordinator only handles Codex, Kiro, and Gemini. `prompts/reviewers/claude.md` is a fallback for when the plugin is unavailable. Codex uses `codex review` (branch/commit/uncommitted) or `codex exec` (sha_range). Only Kiro and Gemini need prompt templates because they're invoked via freeform CLI.
 
 ## Known Limitations
 
