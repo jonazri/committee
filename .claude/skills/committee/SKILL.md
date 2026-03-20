@@ -99,6 +99,14 @@ Always resolve to concrete SHAs. If you cannot resolve the scope, tell the user 
 
 > "Could not identify relevant commits for 'auth changes'. Recent commits: [list from git log --oneline -5]. Did you mean one of these? You can also use `/committee --commit <sha>` or `/committee --base <branch>` to be explicit."
 
+## Progress Notification
+
+Before running anything, tell the user the review has started and roughly how long it will take. Output a message like:
+
+> Starting committee review of [scope description]. Running 4 reviewers in parallel — expect 8–12 minutes for the full report. I'll display it when complete.
+
+Adjust the estimate based on scope: a single commit is ~5–8 min; a large multi-commit range (sha_range) is ~10–15 min since Codex uses `codex exec` which is slower.
+
 ## Setup
 
 Create a temp directory for reviewer outputs. The skill creates this — not the coordinator — because the Claude reviewer is dispatched here.
