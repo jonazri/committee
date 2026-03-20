@@ -196,7 +196,7 @@ Notes:
 
 ## Error Handling
 
-- **Timeouts:** Each reviewer Bash invocation uses a 5-minute (300000ms) timeout. The Claude subagent reviewer has no explicit timeout (it runs via the Agent tool which manages its own lifecycle). If a Bash tool call returns a timeout error (non-zero exit code or timeout signal), the coordinator must capture that as a reviewer failure — record the reviewer name and "timed out after 5 minutes" as the failure reason. Do not retry.
+- **Timeouts:** Kiro and Gemini use a 5-minute (300000ms) timeout. Codex uses a 10-minute (600000ms) timeout (gpt-5.4 with xhigh reasoning is slow). The Claude reviewer has no explicit timeout — the coordinator's 10-minute polling window is the effective cap. If a Bash tool call returns a timeout error, the coordinator records the reviewer name and actual timeout as the failure reason. Do not retry.
 - **Failures:** Any reviewer that produces a non-zero exit code, timeout, empty output, or an error message instead of a review is treated as failed. The coordinator proceeds with the remaining reviewers and notes each failure (reviewer name + reason) in the report header.
 - **Minimum quorum:** If fewer than 2 reviewers succeed, the coordinator aborts and reports the failures to the user rather than producing a low-confidence review.
 - **Verifier fallibility:** The verifier is not expected to be infallible — its judgment calls are surfaced transparently via the three-tier tagging system.
