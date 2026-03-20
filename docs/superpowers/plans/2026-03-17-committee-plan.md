@@ -47,7 +47,9 @@ Then verify the report contains: `## Committee Code Review` header, scope info, 
    - `CLAUDE.md` — Expanded Project Structure section to list kiro.md/gemini.md separately and clarify why Codex/Claude have no custom prompts
    - `prompts/coordinator.md` — Context threshold made concrete (under/over 500 lines instead of "use judgment"); PR scope for Kiro/Gemini made explicit (`git diff {BASE_BRANCH}...{HEAD_BRANCH}`)
 
-3. **`{GIT_RANGE_INSTRUCTIONS}` kept as freeform placeholder** — A reviewer suggested replacing it with raw `{BASE_SHA}`/`{HEAD_SHA}` placeholders. Pushed back: the coordinator fills it with human-readable git commands (e.g. "Run `git diff main...HEAD`"), which is intentionally more helpful for Kiro/Gemini than raw SHAs.
+3. **`--range` and bare SHA range detection added to skill** — The spec's scope table lists only `--base`, `--commit`, `--uncommitted`, and PR as input modes. Added `--range <sha1>..<sha2>` and bare `sha1..sha2` pattern detection to support arbitrary SHA ranges. Codex is automatically skipped for this scope type (no native support).
+
+4. **`{GIT_RANGE_INSTRUCTIONS}` kept as freeform placeholder** — A reviewer suggested replacing it with raw `{BASE_SHA}`/`{HEAD_SHA}` placeholders. Pushed back: the coordinator fills it with human-readable git commands (e.g. "Run `git diff main...HEAD`"), which is intentionally more helpful for Kiro/Gemini than raw SHAs.
 
 ### Known Issues (resolved 2026-03-19)
 

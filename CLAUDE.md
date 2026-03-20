@@ -32,6 +32,7 @@ All four reviewer CLIs must be installed and authenticated:
 - `.claude/skills/committee/SKILL.md` — The skill entry point (installed here for Claude Code to discover it as `/committee`)
 - `prompts/coordinator.md` — Coordinator subagent prompt template
 - `prompts/verifier.md` — Verifier subagent prompt template
+- `prompts/reviewers/claude.md` — Claude review prompt (embedded directly; plugin subagent types unavailable in nested subagent context)
 - `prompts/reviewers/kiro.md` — Kiro review prompt (Kiro uses freeform chat, needs context)
 - `prompts/reviewers/gemini.md` — Gemini review prompt (Gemini uses freeform chat, needs context)
 - `prompts/summarizer.md` — Summarizer subagent prompt (used when a review exceeds 500 lines)

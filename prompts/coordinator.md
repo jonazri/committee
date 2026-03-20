@@ -10,11 +10,12 @@ You are the coordinator for a multi-perspective code review. You will orchestrat
 
 ## Setup
 
-First, create a temp directory for this review session and register a cleanup trap:
+First, create a temp directory for this review session:
 ```bash
 SESSION_DIR=$(mktemp -d /tmp/committee-XXXXXX)
-trap 'rm -rf "$SESSION_DIR"' EXIT
 ```
+
+Note: `trap 'rm -rf "$SESSION_DIR"' EXIT` would only apply within a single Bash invocation — each Bash tool call is its own shell process, so a trap set in one call does not fire when later calls exit. The explicit `rm -rf "$SESSION_DIR"` at the end of Phase 3 is the real cleanup. The temp dir leaks if the coordinator errors mid-run (known limitation, see CLAUDE.md Issue 4).
 
 All reviewer outputs will be written to files in this directory rather than returned directly into your context. This gives you control over context management.
 
@@ -22,18 +23,21 @@ All reviewer outputs will be written to files in this directory rather than retu
 
 Dispatch all four reviewers in parallel. Use a single message with multiple tool calls. Each reviewer writes output to a temp file.
 
-### Reviewer 1: Claude (superpowers:code-reviewer)
+### Reviewer 1: Claude
 
-Dispatch via Agent tool with `subagent_type: "superpowers:code-reviewer"`.
+Dispatch via Agent tool with `subagent_type: "general-purpose"`.
 
-The prompt should follow the code-reviewer template pattern:
-- WHAT_WAS_IMPLEMENTED: The changes being reviewed
-- PLAN_OR_REQUIREMENTS: Check `{REVIEW_CONTEXT}` for a spec or plan file path in the user's original input. If one is referenced, use it. Otherwise use "General code review — no specific plan".
-- BASE_SHA: `{BASE_SHA}` (for `uncommitted` scope, use the current HEAD SHA from `git rev-parse HEAD` instead)
-- HEAD_SHA: `{HEAD_SHA}`
-- DESCRIPTION: `{SCOPE_DESCRIPTION}`
+**Why not `superpowers:code-reviewer`?** Plugin-defined subagent types are only available in top-level Claude Code sessions. The coordinator runs as a nested subagent and cannot access plugin agents.
 
-**Uncommitted scope:** If scope type is `uncommitted`, omit BASE_SHA/HEAD_SHA from the prompt and describe the uncommitted changes in WHAT_WAS_IMPLEMENTED instead.
+Read the prompt template at `prompts/reviewers/claude.md`. Fill in:
+- `{WHAT_WAS_IMPLEMENTED}`: brief description of what's being reviewed
+- `{PLAN_OR_REQUIREMENTS}`: check the user's original input in REVIEW_CONTEXT for a spec/plan file path. If referenced, use it. Otherwise: "General code review — no specific plan".
+- `{DESCRIPTION}`: human-readable scope description
+- `{PLAN_REFERENCE}`: same as PLAN_OR_REQUIREMENTS
+- `{BASE_SHA}`: the base SHA from REVIEW_CONTEXT
+- `{HEAD_SHA}`: the head SHA from REVIEW_CONTEXT
+
+**Uncommitted scope:** If scope type is `uncommitted`, describe the uncommitted changes in WHAT_WAS_IMPLEMENTED and omit BASE_SHA/HEAD_SHA from the prompt.
 
 **After the subagent returns**, write its response text to the temp file yourself using the Write tool: save it to `{SESSION_DIR}/claude.md`. Do not ask the subagent to write the file — it may not have Write tool permissions. The coordinator always controls file I/O.
 
@@ -67,7 +71,7 @@ Read the prompt template at `prompts/reviewers/kiro.md`. Fill in the placeholder
 - `{SCOPE_DESCRIPTION}` — describe the changes
 - `{GIT_RANGE_INSTRUCTIONS}` — tell Kiro what git command to run (e.g. "Run `git diff main...HEAD` to see the changes" or "Run `git show {COMMIT_SHA}` to see the commit")
 
-**Shell injection prevention:** Use the Write tool to write the filled prompt to `{SESSION_DIR}/kiro_prompt.txt` first. Then reference it in the Bash command:
+**Prompt injection partial mitigation:** Use the Write tool to write the filled prompt to `{SESSION_DIR}/kiro_prompt.txt` first. Then pass it via a shell variable (reduces inline quoting issues, but content still goes through shell argument expansion — known limitation, see CLAUDE.md):
 
 ```bash
 KIRO_PROMPT=$(cat "{SESSION_DIR}/kiro_prompt.txt")
@@ -104,7 +108,7 @@ After all reviewers return (or timeout/fail), collect the results.
 
 **Handling failures explicitly:** For each Bash reviewer (Codex, Kiro, Gemini), check the result:
 - Non-zero exit code → failure. Record: "<Reviewer>: exited with code N"
-- Timeout (Bash tool returns timeout error) → failure. Record: "<Reviewer>: timed out after 5 minutes"
+- Timeout (Bash tool returns timeout error) → failure. Record the actual timeout used: "<Reviewer>: timed out after N minutes" (Codex: 10 min, Kiro: 5 min, Gemini: 5 min)
 - Empty output → failure. Record: "<Reviewer>: returned empty output"
 - Error message instead of review content → failure. Record: "<Reviewer>: <first line of error>"
 
@@ -148,7 +152,7 @@ Read the verifier prompt template at `prompts/verifier.md`. Fill in:
 - `{KIRO_REVIEW}` — same
 - `{GEMINI_REVIEW}` — same
 
-Dispatch the verifier as a subagent via the Agent tool. Wait for it to return.
+Dispatch the verifier as a subagent via the Agent tool. Wait for it to return. Note: Agent tool subagents do not support explicit timeouts — the verifier runs until it finishes. For large diffs with many claims, this may take several minutes.
 
 **Verifier failure:** If the verifier Agent call errors or returns no usable output, proceed to Phase 3 without verification annotations. Note in the report header: "⚠️ Verification step failed — findings shown without confirmation status."
 

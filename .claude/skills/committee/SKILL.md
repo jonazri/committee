@@ -91,7 +91,9 @@ git log --oneline -10 --name-only
 # Determine the appropriate scope type and resolve SHAs
 ```
 
-Always resolve to concrete SHAs. If you cannot resolve the scope, tell the user what's ambiguous rather than dispatching with incomplete context.
+Always resolve to concrete SHAs. If you cannot resolve the scope, tell the user what's ambiguous rather than dispatching with incomplete context. For example:
+
+> "Could not identify relevant commits for 'auth changes'. Recent commits: [list from git log --oneline -5]. Did you mean one of these? You can also use `/committee --commit <sha>` or `/committee --base <branch>` to be explicit."
 
 ## Dispatch Coordinator
 
