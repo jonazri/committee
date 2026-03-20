@@ -106,7 +106,9 @@ The skill has already resolved the review scope and provided it in `{REVIEW_CONT
 
 ## Wait for Claude
 
-After all three CLI reviewers complete (or timeout), poll for Claude's review file:
+After all three CLI reviewers complete (or timeout), poll for Claude's review file.
+
+**IMPORTANT:** This Bash call must use a **600000ms timeout** (10 minutes) — the default 120s would kill the loop after 4 iterations.
 
 ```bash
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
@@ -114,7 +116,7 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   sleep 30
 done
 ```
-(20 iterations × 30s = 10 minutes max, matching the user-facing estimate. `{SESSION_DIR}` = substitute the actual path from REVIEW_CONTEXT.)
+(20 × 30s = 10 min max. `{SESSION_DIR}` = substitute the actual path from REVIEW_CONTEXT.)
 
 If `{SESSION_DIR}/claude.md` still does not exist after the loop, record: "Claude: review not received within polling window (10 minutes)".
 

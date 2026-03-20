@@ -27,7 +27,7 @@ All 6 implementation tasks complete. Multiple iterative review+fix cycles follow
 | 3 | `prompts/reviewers/gemini.md` | ✅ Done |
 | 4 | `prompts/verifier.md` | ✅ Done |
 | 5 | `prompts/coordinator.md` | ✅ Done |
-| 6 | `skills/committee/SKILL.md` | ✅ Done |
+| 6 | `.claude/skills/committee/SKILL.md` | ✅ Done |
 | 7 | Smoke test | ⏳ Pending live session |
 
 ### What's Remaining
@@ -47,7 +47,7 @@ Then verify the report contains: `## Committee Code Review` header, scope info, 
    - `CLAUDE.md` — Expanded Project Structure section to list kiro.md/gemini.md separately and clarify why Codex/Claude have no custom prompts
    - `prompts/coordinator.md` — Context threshold made concrete (under/over 500 lines instead of "use judgment"); PR scope for Kiro/Gemini made explicit (`git diff {BASE_BRANCH}...{HEAD_BRANCH}`)
 
-3. **`--range` and bare SHA range detection added to skill** — The spec's scope table lists only `--base`, `--commit`, `--uncommitted`, and PR as input modes. Added `--range <sha1>..<sha2>` and bare `sha1..sha2` pattern detection to support arbitrary SHA ranges. Codex is automatically skipped for this scope type (no native support).
+3. **`--range` and bare SHA range detection added to skill** — The spec's scope table lists only `--base`, `--commit`, `--uncommitted`, and PR as input modes. Added `--range <sha1>..<sha2>` and bare `sha1..sha2` pattern detection to support arbitrary SHA ranges. Codex uses `codex exec` for sha_range (no native `codex review` flag for this scope).
 
 4. **Codex timeout increased from 5 min to 10 min** — gpt-5.4 with xhigh reasoning takes ~5 min for small commits. 10-minute timeout documented in CLAUDE.md.
 
@@ -61,7 +61,7 @@ Issues identified during first live run and addressed in subsequent commit:
 Coordinator now uses Write tool to write filled prompt to `$SESSION_DIR/kiro_prompt.txt` / `$SESSION_DIR/gemini_prompt.txt`, then reads via `$PROMPT=$(cat file)` / stdin redirect. Prompt content no longer inline in bash string.
 
 **Issue 4: Temp directory never cleaned up** — ✅ Fixed
-Added `trap 'rm -rf "$SESSION_DIR"' EXIT` immediately after `mktemp`, plus explicit `rm -rf "$SESSION_DIR"` at end of Phase 3.
+Coordinator runs explicit `rm -rf "{SESSION_DIR}"` at end of Phase 3 and in the quorum abort path. Note: `trap` does not work across Bash tool calls (each call is a separate subprocess), so explicit cleanup is the only mechanism.
 
 ---
 

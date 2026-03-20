@@ -36,7 +36,6 @@ All four reviewer CLIs must be installed and authenticated:
 - `prompts/reviewers/claude.md` — Claude review prompt (embedded directly; plugin subagent types unavailable in nested subagent context)
 - `prompts/reviewers/kiro.md` — Kiro review prompt (Kiro uses freeform chat, needs context)
 - `prompts/reviewers/gemini.md` — Gemini review prompt (Gemini uses freeform chat, needs context)
-- `prompts/summarizer.md` — Summarizer subagent prompt (available but not currently wired in; each verifier handles its own single review file so no summarization is needed)
 - `.committee/` — Session directories created at runtime (gitignored); each run creates `.committee/session-XXXXXX/`
 - `docs/superpowers/specs/` — Design spec
 - `docs/superpowers/plans/` — Implementation plan

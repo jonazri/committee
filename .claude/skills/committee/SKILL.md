@@ -77,13 +77,15 @@ git diff --stat <branch>...HEAD
 git rev-parse <sha>            # resolve to full SHA
 git show --stat <sha>
 ```
+Set `Base SHA = <sha>~1` and `Head SHA = <sha>` in REVIEW_CONTEXT so verifiers have a concrete range.
 
 **For PR (`#123` or PR URL):**
 ```bash
 gh pr view <number> --json title,baseRefName,headRefName,url
 
-# Fetch PR head as a stable local ref — no checkout, no state mutation
+# Fetch PR head AND refresh base branch tracking ref
 git fetch origin "refs/pull/<number>/head:refs/pull/<number>/head"
+git fetch origin <baseRefName>
 
 # Resolve SHAs — skill is the source of truth, coordinator must not re-resolve
 BASE_SHA=$(git merge-base origin/<baseRefName> refs/pull/<number>/head)
@@ -156,15 +158,22 @@ git show --stat {COMMIT_SHA} > "{SESSION_DIR}/diff_stat.txt" 2>&1
 
 ### Trust level dialog
 
-Ask the user which trust level to use for CLI reviewers (Kiro, Gemini). This controls whether reviewers can explore the repo autonomously or are limited to reading the precomputed diff:
+Use the AskUserQuestion tool to present a proper selection menu:
 
-> **Reviewer access level:**
-> 1. **Read-only** (recommended) — Reviewers read the precomputed diff file only. No shell access. Safe for untrusted code.
-> 2. **Full access** — Reviewers can explore the repo autonomously (git log, grep, blame, etc). Richer reviews but exposes the repo to prompt injection from diff content.
->
-> Choose [1] or [2] (default: 1):
+```
+AskUserQuestion:
+  questions:
+    - question: "What access level should CLI reviewers (Kiro, Gemini) have?"
+      header: "Trust level"
+      multiSelect: false
+      options:
+        - label: "Read-only (Recommended)"
+          description: "Reviewers read the precomputed diff file only. No shell access. Safe for untrusted code."
+        - label: "Full access"
+          description: "Reviewers can explore the repo autonomously (git log, grep, blame). Allows arbitrary command execution if diff contains adversarial content."
+```
 
-Record the choice. If the user doesn't answer or says "1", use read-only. If they say "2" or "full", use full-access.
+Record the user's selection. Default to read-only if no answer.
 
 Note the SESSION_DIR path and trust level. You will pass both to the coordinator.
 

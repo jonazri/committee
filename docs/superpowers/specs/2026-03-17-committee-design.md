@@ -4,20 +4,21 @@
 
 Committee is a Claude Code skill (`/committee`) that orchestrates parallel code reviews from four independent AI reviewers, verifies claims made by the reviewers, and synthesizes the results into a single structured report.
 
-The skill is a thin launcher that dispatches a coordinator subagent with fresh context. The coordinator handles all orchestration — dispatching reviewers, running verification, producing the final report.
+The skill handles scope resolution, diff precomputation, trust level selection, and Claude reviewer dispatch before handing off to a coordinator subagent. The coordinator handles all orchestration — dispatching reviewers, running verification, producing the final report.
 
 ## Architecture
 
 ```
 User session
-  └── /committee (skill — thin launcher)
+  └── /committee (skill — scope resolution, diff precomputation, trust dialog, Claude dispatch)
+        ├── Claude code-reviewer subagent (background, parallel with coordinator)
         └── Coordinator subagent (fresh context)
-              ├── Claude code-reviewer subagent (parallel)
               ├── Codex review via Bash (parallel)
               ├── Kiro review via Bash (parallel)
-              ├── Gemini code-review via Bash (parallel)
+              ├── Gemini review via Bash (parallel)
+              ├── Poll for Claude's review file
               │
-              ├── Verifier subagent (after all reviews return)
+              ├── Per-reviewer verifier subagents (parallel, one per reviewer)
               │
               └── Synthesis (coordinator itself, produces final report)
 ```
@@ -87,7 +88,7 @@ After all 4 reviews return, the coordinator dispatches **one verifier per review
 
 **As-built deviations from original design:**
 - Session directories are project-relative (`.committee/session-XXXXXX/`) not `/tmp/` — subagents have Read tool access to the project directory
-- The summarizer subagent (`prompts/summarizer.md`) is defined but not currently invoked — per-reviewer verifiers each handle a single review file, so context budget is not a concern at that level
+- The summarizer subagent was removed — per-reviewer verifiers each handle a single review file, so context budget is not a concern at that level
 - Claude reviewer is dispatched by the skill layer (not the coordinator) using `superpowers:code-reviewer`, which requires top-level session plugin access unavailable in nested subagents
 
 **Verifier input (per reviewer):**
@@ -167,7 +168,6 @@ committee/
 ├── prompts/
 │   ├── coordinator.md            # Coordinator subagent prompt template
 │   ├── verifier.md               # Verifier subagent prompt template (one per reviewer, parallel)
-│   ├── summarizer.md             # Summarizer prompt (reserved, not currently invoked)
 │   └── reviewers/
 │       ├── claude.md             # Claude review prompt (fallback when superpowers plugin unavailable)
 │       ├── kiro.md               # Kiro review prompt (freeform chat, needs context)
