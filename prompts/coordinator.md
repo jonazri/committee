@@ -40,10 +40,11 @@ For uncommitted changes:
 codex review --uncommitted > "{SESSION_DIR}/codex.md" 2>&1
 ```
 
-For sha_range: `codex review` has no SHA range flag, but `codex exec` can run git commands autonomously. Use it with `-o` to write just the clean final review message:
+For sha_range or pr: `codex review` has no SHA range flag, but `codex exec` can run git commands autonomously. Write the review prompt to `{SESSION_DIR}/codex_prompt.txt` using the Write tool, then pass via stdin (avoids `$()` substitution and inline multiline prompts):
 ```bash
-codex exec --ephemeral -o "{SESSION_DIR}/codex.md" "Review the git changes in this repository between commit {BASE_SHA} and commit {HEAD_SHA}. First run \`git diff --stat {BASE_SHA}..{HEAD_SHA}\` to see a summary of changed files, then run \`git diff {BASE_SHA}..{HEAD_SHA}\` to read the actual changes. Review for bugs, security issues, design problems, and code quality. Format your review with Critical (Must Fix), Important (Should Fix), and Minor (Nice to Have) sections. Include specific file:line references for each finding." 2>&1
+codex exec --ephemeral -o "{SESSION_DIR}/codex.md" - < "{SESSION_DIR}/codex_prompt.txt" 2>&1
 ```
+The prompt file should contain: "Review the git changes between commit {BASE_SHA} and {HEAD_SHA}. Run `git diff --stat {BASE_SHA}..{HEAD_SHA}` for a summary, then `git diff {BASE_SHA}..{HEAD_SHA}` for the full diff. Format with Critical/Important/Minor sections with file:line references."
 Note: `codex exec` uses gpt-5.4/xhigh — allow the full 10-minute timeout.
 
 ### Reviewer 2: Kiro
@@ -52,23 +53,21 @@ Read the prompt template at `prompts/reviewers/kiro.md`. Fill in the placeholder
 - `{SCOPE_DESCRIPTION}` — describe the changes
 - `{GIT_RANGE_INSTRUCTIONS}` — depends on trust level (see below)
 
-Write the filled prompt to `{SESSION_DIR}/kiro_prompt.txt` first, then dispatch.
+Write the filled prompt to `{SESSION_DIR}/kiro_prompt.txt` using the Write tool. Then pass a short static instruction pointing Kiro to the file (avoids `$()` command substitution that triggers security alerts):
 
 **If Trust level = read-only:**
 Set `{GIT_RANGE_INSTRUCTIONS}` to: "Read the diff file at `{SESSION_DIR}/diff.txt` to see the changes. Read `{SESSION_DIR}/diff_stat.txt` for a summary."
 ```bash
-KIRO_PROMPT=$(cat "{SESSION_DIR}/kiro_prompt.txt")
-kiro-cli chat --no-interactive --trust-tools=fs_read "$KIRO_PROMPT" > "{SESSION_DIR}/kiro.md" 2>&1
+kiro-cli chat --no-interactive --trust-tools=fs_read "Read {SESSION_DIR}/kiro_prompt.txt for your review instructions, then follow them." > "{SESSION_DIR}/kiro.md" 2>&1
 ```
-Kiro can read files but cannot execute shell commands.
+Kiro reads its instructions from the file. Can read files but cannot execute shell commands.
 
 **If Trust level = full-access:**
 Set `{GIT_RANGE_INSTRUCTIONS}` to: "Run `git diff {BASE_SHA}..{HEAD_SHA}` to see the changes."
 ```bash
-KIRO_PROMPT=$(cat "{SESSION_DIR}/kiro_prompt.txt")
-kiro-cli chat --no-interactive --trust-all-tools "$KIRO_PROMPT" > "{SESSION_DIR}/kiro.md" 2>&1
+kiro-cli chat --no-interactive --trust-all-tools "Read {SESSION_DIR}/kiro_prompt.txt for your review instructions, then follow them." > "{SESSION_DIR}/kiro.md" 2>&1
 ```
-Kiro can read files and execute shell commands.
+Kiro reads its instructions from the file. Can read files and execute shell commands.
 
 5-minute (300000ms) timeout.
 
@@ -87,11 +86,11 @@ Gemini receives the diff content directly; no `-y` flag, no tool auto-approval.
 
 **If Trust level = full-access:**
 Set `{GIT_RANGE_INSTRUCTIONS}` to: "Run `git diff {BASE_SHA}..{HEAD_SHA}` to see the changes."
+Pipe the prompt file via stdin with `-y` for auto-approval (avoids `$()` substitution):
 ```bash
-GEMINI_PROMPT=$(cat "{SESSION_DIR}/gemini_prompt.txt")
-gemini -p "$GEMINI_PROMPT" -e code-review -y -o text > "{SESSION_DIR}/gemini.md" 2>&1
+gemini -p "Review the code changes. Full instructions on stdin." -e code-review -y -o text < "{SESSION_DIR}/gemini_prompt.txt" > "{SESSION_DIR}/gemini.md" 2>&1
 ```
-Gemini can read files and execute commands with auto-approval.
+Gemini reads its full prompt from stdin. Can read files and execute commands with auto-approval.
 
 5-minute (300000ms) timeout.
 
@@ -102,8 +101,8 @@ The skill has already resolved the review scope and provided it in `{REVIEW_CONT
 - **Scope type: branch_diff** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, use `git diff {BASE_BRANCH}...HEAD`.
 - **Scope type: commit** → `codex review --commit {COMMIT_SHA}` (use `Commit SHA` from REVIEW_CONTEXT). For Kiro/Gemini, use `git show {COMMIT_SHA}`.
 - **Scope type: uncommitted** → `codex review --uncommitted`. For Kiro/Gemini, use `git diff` and `git diff --staged`.
-- **Scope type: pr** → `Base SHA` and `Head SHA` are pre-resolved by the skill. Use `codex exec --ephemeral -o "{SESSION_DIR}/codex.md" "prompt covering {BASE_SHA}..{HEAD_SHA}"` (same pattern as sha_range — reviews the full PR diff, not just the tip commit). For Kiro/Gemini, use `git diff {BASE_BRANCH}...{HEAD_BRANCH}` (or `git diff {BASE_SHA}..{HEAD_SHA}`).
-- **Scope type: sha_range** → `codex exec --ephemeral -o FILE "prompt with {BASE_SHA}..{HEAD_SHA}"`. For Kiro/Gemini, instruct them to run `git diff {BASE_SHA}..{HEAD_SHA}`.
+- **Scope type: pr** → `Base SHA` and `Head SHA` are pre-resolved by the skill. Write codex prompt to file, use `codex exec --ephemeral -o FILE - < prompt_file` (same as sha_range). For Kiro/Gemini, reference the diff file or `git diff {BASE_BRANCH}...{HEAD_BRANCH}`.
+- **Scope type: sha_range** → Write codex prompt to file, use `codex exec --ephemeral -o FILE - < prompt_file`. For Kiro/Gemini, reference the diff file or `git diff {BASE_SHA}..{HEAD_SHA}`.
 
 ## Wait for Claude
 
