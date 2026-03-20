@@ -82,11 +82,17 @@ git show --stat <sha>
 ```bash
 gh pr view <number> --json title,baseRefName,headRefName,url
 
-# Fetch the PR branch so git diff works locally
-gh pr checkout <number> --detach 2>/dev/null || git fetch origin "refs/pull/<number>/head:refs/pull/<number>/head"
+# Fetch PR head as a stable local ref — no checkout, no state mutation
+git fetch origin "refs/pull/<number>/head:refs/pull/<number>/head"
 
 gh pr diff <number> --stat
 ```
+
+Set in REVIEW_CONTEXT:
+- `Head branch: refs/pull/<number>/head` (the fetched ref — not the remote branch name)
+- `PR cleanup ref: refs/pull/<number>/head` (coordinator cleans this up in Phase 3)
+
+The coordinator maps PR scope to CLI flags using `refs/pull/<number>/head` as the HEAD ref. No `gh pr checkout` — that mutates the user's working tree.
 
 **For vague input (e.g., "review the auth changes"):**
 ```bash
@@ -105,25 +111,27 @@ Always resolve to concrete SHAs. If you cannot resolve the scope, tell the user 
 
 Before running anything, tell the user the review has started and roughly how long it will take. Output a message like:
 
-> Starting committee review of [scope description]. Running 4 reviewers in parallel — expect 8–12 minutes for the full report. I'll display it when complete.
+> Starting committee review of [scope description]. Running 4 reviewers in parallel — expect 8–10 minutes for the full report. I'll display it when complete.
 
-Adjust the estimate based on scope: a single commit is ~5–8 min; a large multi-commit range (sha_range) is ~10–15 min since Codex uses `codex exec` which is slower.
+Adjust the estimate based on scope: a single commit is ~5–8 min; a large multi-commit range (sha_range) is ~8–10 min.
 
 ## Setup
 
-Create the session directory in the project root (`.committee/` subdirectory). This ensures all subagents — including verifiers — can access review files via the Read tool, which has project directory access but not `/tmp`.
+Create the session directory anchored to the project root. Using `git rev-parse --show-toplevel` ensures the path is correct even when Claude Code runs from a subdirectory. The `.committee/` directory is gitignored and accessible to all subagents via the Read tool.
 
 ```bash
-mkdir -p .committee
-SESSION_DIR=$(mktemp -d .committee/session-XXXXXX) && echo "$SESSION_DIR"
-trap 'rm -rf "$SESSION_DIR"' EXIT
+PROJECT_ROOT=$(git rev-parse --show-toplevel)
+mkdir -p "$PROJECT_ROOT/.committee"
+SESSION_DIR=$(mktemp -d "$PROJECT_ROOT/.committee/session-XXXXXX") && echo "$SESSION_DIR"
+# No trap here — trap fires on Bash subprocess exit (immediately), not session end.
+# Cleanup is handled by the coordinator's explicit rm -rf at the end of Phase 3.
 ```
 
 Note the SESSION_DIR path. You will write Claude's review here and pass it to the coordinator.
 
 ## Dispatch Claude Reviewer and Coordinator (in parallel)
 
-The skill dispatches Claude in the background and the coordinator in the foreground simultaneously. This means Claude and the CLI reviewers (Codex, Kiro, Gemini) all run in parallel — saving ~2 minutes vs. running Claude first.
+The skill dispatches Claude in the background and the coordinator in the foreground simultaneously. This means Claude and the CLI reviewers (Codex, Kiro, Gemini) all run in parallel.
 
 ### Step 1: Dispatch Claude reviewer in background
 
@@ -153,8 +161,9 @@ Base SHA: <resolved SHA or "none" for uncommitted>
 Head SHA: <resolved SHA>
 Commit SHA: <resolved SHA, for commit scope only>
 Base branch: <branch name, if applicable>
-Head branch: <PR head branch name, if PR scope>
+Head branch: <refs/pull/<n>/head for PR scope, or remote branch name otherwise>
 PR number: <if applicable>
+PR cleanup ref: <refs/pull/<n>/head — coordinator deletes this in Phase 3, if PR scope>
 Diff stat:
 <output of the diff --stat command>
 Session dir: <the SESSION_DIR path>
@@ -175,8 +184,8 @@ Before presenting the coordinator's report to the user, apply `superpowers:recei
 Skill tool: superpowers:receiving-code-review
 ```
 
-This will guide you to treat the committee report as external reviewer feedback — verify technical claims against the actual codebase, check whether findings hold for this specific project, and flag any suggestions that seem questionable (e.g. YAGNI concerns, missing context, technically incorrect for this stack). Do not performatively accept all findings; evaluate each one.
+This will guide you to treat the committee report as external reviewer feedback — verify technical claims against the actual codebase, check whether findings hold for this specific project, and flag any suggestions that seem questionable. Do not performatively accept all findings; evaluate each one.
 
-After evaluation, present the report to the user with any technically unsound or questionable findings annotated with your assessment (e.g. a brief note that a finding may not apply, or that a claim was verified in the codebase and holds).
+After evaluation, present the report to the user with any technically unsound or questionable findings annotated with your assessment.
 
 If the coordinator reports an abort (quorum not met), display that message instead — no evaluation needed.

@@ -1,5 +1,10 @@
 # Review Summarizer
 
+<!-- STATUS: Reserved for future use — not currently invoked by any prompt in the system.
+     The per-reviewer verifier design gives each verifier exactly one review file,
+     so context budget is not a concern at that level. This prompt is retained in case
+     a future architecture reintroduces coordinator-level review reading. -->
+
 You are condensing a code review to reduce its size while preserving all actionable content.
 
 ## Input

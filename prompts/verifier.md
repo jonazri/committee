@@ -42,6 +42,7 @@ Include the reviewer's original severity tag on each claim so the coordinator ca
 
 #### Confirmed
 - **<claim summary>** [Critical|Important|Minor] — Evidence: `<file:line>` — <one sentence explanation>
+  Fix: <optional — include only if a specific fix is evident from the code>
 
 #### Refuted
 - **<claim summary>** [Critical|Important|Minor] — Evidence: `<file:line>` — <what you found instead>

@@ -81,7 +81,7 @@ The skill has already resolved the review scope and provided it in `{REVIEW_CONT
 - **Scope type: branch_diff** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, use `git diff {BASE_BRANCH}...HEAD`.
 - **Scope type: commit** → `codex review --commit {COMMIT_SHA}` (use `Commit SHA` from REVIEW_CONTEXT). For Kiro/Gemini, use `git show {COMMIT_SHA}`.
 - **Scope type: uncommitted** → `codex review --uncommitted`. For Kiro/Gemini, use `git diff` and `git diff --staged`.
-- **Scope type: pr** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, use `git diff {BASE_BRANCH}...{HEAD_BRANCH}`.
+- **Scope type: pr** → Use `git merge-base {BASE_BRANCH} {HEAD_BRANCH}` to get the base SHA, then `codex review --commit {HEAD_BRANCH}` (HEAD_BRANCH = `refs/pull/<n>/head`). For Kiro/Gemini, use `git diff {BASE_BRANCH}...{HEAD_BRANCH}`. Note: `{HEAD_BRANCH}` here is `refs/pull/<n>/head` — a local ref created by the skill's `git fetch`.
 - **Scope type: sha_range** → `codex exec --ephemeral -o FILE "prompt with {BASE_SHA}..{HEAD_SHA}"`. For Kiro/Gemini, instruct them to run `git diff {BASE_SHA}..{HEAD_SHA}`.
 
 ## Wait for Claude
@@ -90,12 +90,13 @@ After all three CLI reviewers complete (or timeout), poll for Claude's review fi
 
 ```bash
 for i in $(seq 1 10); do
-  [ -f "{SESSION_DIR}/claude.md" ] && break
+  [ -f "$SESSION_DIR/claude.md" ] && break
   sleep 30
 done
 ```
+(`$SESSION_DIR` is a shell variable — substitute the actual path from REVIEW_CONTEXT before running.)
 
-If `{SESSION_DIR}/claude.md` still does not exist after the loop, record: "Claude: review not received within polling window (5 minutes)".
+If `$SESSION_DIR/claude.md` still does not exist after the loop, record: "Claude: review not received within polling window (5 minutes)".
 
 ## Phase 2: Verify Claims
 
@@ -189,3 +190,9 @@ After producing the report, clean up:
 ```bash
 rm -rf "$SESSION_DIR"
 ```
+
+If scope type was `pr`, also delete the fetched PR ref to avoid leaving stale refs in the repo:
+```bash
+git update-ref -d {PR_CLEANUP_REF} 2>/dev/null || true
+```
+(`{PR_CLEANUP_REF}` = the `PR cleanup ref` value from REVIEW_CONTEXT, e.g. `refs/pull/123/head`)

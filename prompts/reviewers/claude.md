@@ -27,11 +27,19 @@ git diff --stat {BASE_SHA}..{HEAD_SHA}
 git diff {BASE_SHA}..{HEAD_SHA}
 ```
 
-**Uncommitted scope:** If BASE_SHA is omitted or "none", review uncommitted changes instead:
+**Commit scope:** If BASE_SHA is omitted or "none" and a Commit SHA was specified, review that single commit:
+```bash
+git show --stat {COMMIT_SHA}
+git show {COMMIT_SHA}
+```
+
+**Uncommitted scope:** If BASE_SHA is omitted or "none" and no Commit SHA, review uncommitted changes:
 ```bash
 git diff          # unstaged
 git diff --staged # staged
 ```
+
+> Note: This template is a fallback used when `superpowers:code-reviewer` is unavailable. It produces Strengths/Issues/Assessment format. The coordinator's synthesis template uses Critical/Important/Minor format — the verifier handles normalization between the two.
 
 ## Review Checklist
 
