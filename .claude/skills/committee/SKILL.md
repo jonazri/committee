@@ -133,7 +133,40 @@ SESSION_DIR=$(mktemp -d "$PROJECT_ROOT/.committee/session-XXXXXX") && echo "$SES
 # Cleanup is handled by the coordinator's explicit rm -rf at the end of Phase 3.
 ```
 
-Note the SESSION_DIR path. You will write Claude's review here and pass it to the coordinator.
+### Precompute the diff
+
+Write the diff and diff stat to session files so reviewers don't need shell access to see the changes:
+
+```bash
+git diff {BASE_SHA}..{HEAD_SHA} > "{SESSION_DIR}/diff.txt" 2>&1
+git diff --stat {BASE_SHA}..{HEAD_SHA} > "{SESSION_DIR}/diff_stat.txt" 2>&1
+```
+
+For uncommitted scope:
+```bash
+(git diff; git diff --staged) > "{SESSION_DIR}/diff.txt" 2>&1
+(git diff --stat; git diff --staged --stat) > "{SESSION_DIR}/diff_stat.txt" 2>&1
+```
+
+For commit scope:
+```bash
+git show {COMMIT_SHA} > "{SESSION_DIR}/diff.txt" 2>&1
+git show --stat {COMMIT_SHA} > "{SESSION_DIR}/diff_stat.txt" 2>&1
+```
+
+### Trust level dialog
+
+Ask the user which trust level to use for CLI reviewers (Kiro, Gemini). This controls whether reviewers can explore the repo autonomously or are limited to reading the precomputed diff:
+
+> **Reviewer access level:**
+> 1. **Read-only** (recommended) — Reviewers read the precomputed diff file only. No shell access. Safe for untrusted code.
+> 2. **Full access** — Reviewers can explore the repo autonomously (git log, grep, blame, etc). Richer reviews but exposes the repo to prompt injection from diff content.
+>
+> Choose [1] or [2] (default: 1):
+
+Record the choice. If the user doesn't answer or says "1", use read-only. If they say "2" or "full", use full-access.
+
+Note the SESSION_DIR path and trust level. You will pass both to the coordinator.
 
 ## Dispatch Claude Reviewer and Coordinator (in parallel)
 
@@ -180,6 +213,7 @@ PR cleanup ref: <refs/pull/<n>/head — coordinator deletes this in Phase 3, if 
 Diff stat:
 <output of the diff --stat command>
 Session dir: <the SESSION_DIR path>
+Trust level: <read-only | full-access>
 Claude review: background (coordinator must poll for SESSION_DIR/claude.md)
 User's original input: <the raw args passed to /committee>
 ```

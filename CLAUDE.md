@@ -55,7 +55,7 @@ Note: Claude is dispatched by the skill (top-level, has plugin access) using `su
 
 **Codex sha_range** — Codex has no native flag for arbitrary SHA ranges. For sha_range scope, the coordinator uses `codex exec --ephemeral -o FILE "prompt with SHA range"`, which lets Codex run `git diff` autonomously and produce a clean review via the `-o` output flag. Tested working; takes ~5-10 minutes.
 
-**Shell injection + `--trust-all-tools`** — Kiro reviewer prompts go through shell variable expansion (`"$KIRO_PROMPT"`), and Kiro runs with `--trust-all-tools` (auto-approves all bash). A diff containing shell metacharacters in commit messages or filenames could cause unintended command execution. Acceptable for reviewing your own code; do not use on untrusted diffs without switching Kiro to a restricted tool set.
+**Shell injection + `--trust-all-tools`** — In full-access mode, Kiro runs with `--trust-all-tools` (auto-approves all bash) and Gemini runs with `-y` (yolo mode). A diff containing adversarial content could trigger unintended command execution via prompt injection on the reviewer's LLM. In read-only mode (default), Kiro uses `--trust-tools=fs_read` (file reading only, no shell) and Gemini receives the diff via stdin without tool access. The skill prompts users to choose the trust level before each run.
 
 **Kiro network dependency** — Kiro connects to an external AWS service (`q.us-east-1.amazonaws.com`). It will fail with a network error in offline environments or if that service is unavailable. Treat Kiro as best-effort.
 

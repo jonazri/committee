@@ -50,14 +50,25 @@ Note: `codex exec` uses gpt-5.4/xhigh — allow the full 10-minute timeout.
 
 Read the prompt template at `prompts/reviewers/kiro.md`. Fill in the placeholders:
 - `{SCOPE_DESCRIPTION}` — describe the changes
-- `{GIT_RANGE_INSTRUCTIONS}` — tell Kiro what git command to run
+- `{GIT_RANGE_INSTRUCTIONS}` — depends on trust level (see below)
 
-**Prompt injection partial mitigation:** Write the filled prompt to `{SESSION_DIR}/kiro_prompt.txt` first, then pass via shell variable:
+Write the filled prompt to `{SESSION_DIR}/kiro_prompt.txt` first, then dispatch.
 
+**If Trust level = read-only:**
+Set `{GIT_RANGE_INSTRUCTIONS}` to: "Read the diff file at `{SESSION_DIR}/diff.txt` to see the changes. Read `{SESSION_DIR}/diff_stat.txt` for a summary."
+```bash
+KIRO_PROMPT=$(cat "{SESSION_DIR}/kiro_prompt.txt")
+kiro-cli chat --no-interactive --trust-tools=fs_read "$KIRO_PROMPT" > "{SESSION_DIR}/kiro.md" 2>&1
+```
+Kiro can read files but cannot execute shell commands.
+
+**If Trust level = full-access:**
+Set `{GIT_RANGE_INSTRUCTIONS}` to: "Run `git diff {BASE_SHA}..{HEAD_SHA}` to see the changes."
 ```bash
 KIRO_PROMPT=$(cat "{SESSION_DIR}/kiro_prompt.txt")
 kiro-cli chat --no-interactive --trust-all-tools "$KIRO_PROMPT" > "{SESSION_DIR}/kiro.md" 2>&1
 ```
+Kiro can read files and execute shell commands.
 
 5-minute (300000ms) timeout.
 
@@ -65,12 +76,22 @@ kiro-cli chat --no-interactive --trust-all-tools "$KIRO_PROMPT" > "{SESSION_DIR}
 
 Read the prompt template at `prompts/reviewers/gemini.md`. Fill in the placeholders (same as Kiro).
 
-**Prompt injection partial mitigation:** Write the filled prompt to `{SESSION_DIR}/gemini_prompt.txt` first, then pass via shell variable with `-p`:
+Write the filled prompt to `{SESSION_DIR}/gemini_prompt.txt` first, then dispatch.
 
+**If Trust level = read-only:**
+Set `{GIT_RANGE_INSTRUCTIONS}` to: "The diff is included below." Then pipe the precomputed diff as stdin — gemini reads stdin without needing tool access:
+```bash
+cat "{SESSION_DIR}/gemini_prompt.txt" "{SESSION_DIR}/diff.txt" | gemini -p "Review the code changes provided on stdin." -e code-review -o text > "{SESSION_DIR}/gemini.md" 2>&1
+```
+Gemini receives the diff content directly; no `-y` flag, no tool auto-approval.
+
+**If Trust level = full-access:**
+Set `{GIT_RANGE_INSTRUCTIONS}` to: "Run `git diff {BASE_SHA}..{HEAD_SHA}` to see the changes."
 ```bash
 GEMINI_PROMPT=$(cat "{SESSION_DIR}/gemini_prompt.txt")
 gemini -p "$GEMINI_PROMPT" -e code-review -y -o text > "{SESSION_DIR}/gemini.md" 2>&1
 ```
+Gemini can read files and execute commands with auto-approval.
 
 5-minute (300000ms) timeout.
 
