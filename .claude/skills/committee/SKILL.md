@@ -17,6 +17,7 @@ The user invokes `/committee` with optional arguments. Parse them to determine r
    - `--range <sha1>..<sha2>` → explicit SHA range
 2. Check for bare SHA range pattern (e.g. `abc123..def456` or `abc123...def456`):
    - Matches `[0-9a-f]{6,40}\.\.\.?[0-9a-f]{6,40}` (two or three dots) → SHA range
+   - Note: three-dot (`...`) symmetric diff semantics are not preserved — both are resolved as `sha1..sha2` two-dot range. Tell the user if they used `...` so they know the semantics shifted.
 3. Check for PR reference:
    - `#<number>` or a GitHub PR URL → PR review
 4. Check for freeform text:
@@ -44,11 +45,14 @@ git status --porcelain
 # Check current branch
 git rev-parse --abbrev-ref HEAD
 
-# Detect default branch — try local refs first (fast, no network)
+# Detect default branch — remote tracking ref is most reliable
+git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || \
+git remote show origin 2>/dev/null | grep 'HEAD branch' | awk '{print $NF}' || \
+# Last resort: check for common names
 git rev-parse --verify main >/dev/null 2>&1 && echo "main" || \
-git rev-parse --verify master >/dev/null 2>&1 && echo "master" || \
-git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||'
-# Only fall back to network-dependent git remote show origin if all else fails
+git rev-parse --verify master >/dev/null 2>&1 && echo "master"
+# Note: checking local main/master last — a stray local branch with that
+# name does not mean it's the default upstream branch
 
 # If on a feature branch, get the diff stat vs default branch
 git diff --stat <default_branch>...HEAD

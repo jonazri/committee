@@ -60,10 +60,11 @@ For uncommitted changes:
 codex review --uncommitted > "{SESSION_DIR}/codex.md" 2>&1
 ```
 
-For sha_range (multi-commit range): Codex has no native SHA range support and the stdin workaround (`codex review -`) is broken — it treats stdin as custom instructions, not as the diff to review. Skip Codex and write a failure note:
+For sha_range (multi-commit range): `codex review` has no SHA range flag, but `codex exec` can run git commands autonomously. Use it with `-o` to write just the clean final review message (no execution noise):
 ```bash
-echo "REVIEWER FAILED: Codex does not support multi-commit SHA ranges" > "{SESSION_DIR}/codex.md"
+codex exec --ephemeral -o "{SESSION_DIR}/codex.md" "Review the git changes in this repository between commit {BASE_SHA} and commit {HEAD_SHA}. First run \`git diff --stat {BASE_SHA}..{HEAD_SHA}\` to see a summary of changed files, then run \`git diff {BASE_SHA}..{HEAD_SHA}\` to read the actual changes. Review for bugs, security issues, design problems, and code quality. Format your review with Critical (Must Fix), Important (Should Fix), and Minor (Nice to Have) sections. Include specific file:line references for each finding." 2>&1
 ```
+Note: `codex exec` uses gpt-5.4/xhigh reasoning — allow the full 10-minute (600000ms) timeout.
 
 ### Reviewer 3: Kiro
 
@@ -84,10 +85,11 @@ kiro-cli chat --no-interactive --trust-all-tools "$KIRO_PROMPT" > "{SESSION_DIR}
 
 Read the prompt template at `prompts/reviewers/gemini.md`. Fill in the placeholders (same as Kiro).
 
-**Shell injection prevention:** Use the Write tool to write the filled prompt to `{SESSION_DIR}/gemini_prompt.txt` first. Then pipe it via stdin (gemini reads stdin as prompt input):
+**Prompt injection partial mitigation:** Use the Write tool to write the filled prompt to `{SESSION_DIR}/gemini_prompt.txt` first. Then pass via a shell variable with `-p` (required for non-interactive mode; stdin alone without `-p` starts interactive mode):
 
 ```bash
-gemini -e code-review -y -o text < "{SESSION_DIR}/gemini_prompt.txt" > "{SESSION_DIR}/gemini.md" 2>&1
+GEMINI_PROMPT=$(cat "{SESSION_DIR}/gemini_prompt.txt")
+gemini -p "$GEMINI_PROMPT" -e code-review -y -o text > "{SESSION_DIR}/gemini.md" 2>&1
 ```
 
 5-minute (300000ms) timeout.
@@ -100,7 +102,7 @@ The skill has already resolved the review scope and provided it in `{REVIEW_CONT
 - **Scope type: commit** → `codex review --commit {COMMIT_SHA}`. For Kiro/Gemini, use `git show {COMMIT_SHA}`.
 - **Scope type: uncommitted** → `codex review --uncommitted`. For Kiro/Gemini, use `git diff` and `git diff --staged`.
 - **Scope type: pr** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, use `git diff {BASE_BRANCH}...{HEAD_BRANCH}` (both branch names are provided in {REVIEW_CONTEXT}).
-- **Scope type: sha_range (Base branch: none)** → Codex does not support SHA ranges. Write `REVIEWER FAILED: Codex does not support multi-commit SHA ranges` to the codex temp file and proceed with the other three reviewers.
+- **Scope type: sha_range (Base branch: none)** → Use `codex exec --ephemeral -o FILE "prompt with {BASE_SHA}..{HEAD_SHA}"`. For Kiro/Gemini, instruct them to run `git diff {BASE_SHA}..{HEAD_SHA}`.
 
 ## Phase 2: Verify Claims
 
@@ -202,4 +204,7 @@ Synthesize into this format:
 - **Omit empty sections.** If no Critical findings, skip that section entirely.
 - **Be honest about failures.** If a reviewer failed, say so in the header.
 
-After producing the report, clean up: `rm -rf "$SESSION_DIR"` (the EXIT trap will also handle this).
+After producing the report, clean up:
+```bash
+rm -rf "$SESSION_DIR"
+```
