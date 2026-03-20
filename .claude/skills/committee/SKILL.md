@@ -138,6 +138,7 @@ Scope: <human-readable description>
 Base SHA: <resolved SHA or "none" for uncommitted>
 Head SHA: <resolved SHA>
 Base branch: <branch name, if applicable>
+Head branch: <PR head branch name, if PR scope>
 PR number: <if applicable>
 Diff stat:
 <output of the diff --stat command>

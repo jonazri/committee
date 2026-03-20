@@ -110,6 +110,9 @@ For Claude, check the `Claude review` field in REVIEW_CONTEXT. If it says `REVIE
 
 **Successful reviews are not shown** — insufficient reviewer diversity for a reliable committee review.
 ```
+```bash
+rm -rf "$SESSION_DIR"
+```
 
 **If quorum met:** Check the size of each review file individually before reading into your context:
 
