@@ -85,14 +85,20 @@ gh pr view <number> --json title,baseRefName,headRefName,url
 # Fetch PR head as a stable local ref — no checkout, no state mutation
 git fetch origin "refs/pull/<number>/head:refs/pull/<number>/head"
 
+# Resolve SHAs — skill is the source of truth, coordinator must not re-resolve
+BASE_SHA=$(git merge-base <baseRefName> refs/pull/<number>/head)
+HEAD_SHA=$(git rev-parse refs/pull/<number>/head)
+
 gh pr diff <number> --stat
 ```
 
 Set in REVIEW_CONTEXT:
+- `Base SHA: <BASE_SHA from merge-base above>`
+- `Head SHA: <HEAD_SHA from rev-parse above>`
 - `Head branch: refs/pull/<number>/head` (the fetched ref — not the remote branch name)
 - `PR cleanup ref: refs/pull/<number>/head` (coordinator cleans this up in Phase 3)
 
-The coordinator maps PR scope to CLI flags using `refs/pull/<number>/head` as the HEAD ref. No `gh pr checkout` — that mutates the user's working tree.
+The coordinator maps PR scope to CLI flags using the pre-resolved SHAs and `refs/pull/<number>/head`. No `gh pr checkout` — that mutates the user's working tree.
 
 **For vague input (e.g., "review the auth changes"):**
 ```bash
@@ -146,7 +152,14 @@ Append to the prompt: "Write your complete review to `<SESSION_DIR>/claude.md` u
 
 **Uncommitted scope:** Omit BASE_SHA/HEAD_SHA and describe the uncommitted changes in WHAT_WAS_IMPLEMENTED instead.
 
-**Fallback:** If the background dispatch fails, dispatch `general-purpose` instead with the prompt template at `prompts/reviewers/claude.md`, filling in the same placeholders (also in background).
+**Fallback:** If the background dispatch fails, dispatch `general-purpose` instead with the prompt template at `prompts/reviewers/claude.md`, filling in these placeholders (also in background):
+- `{WHAT_WAS_IMPLEMENTED}` — scope description
+- `{PLAN_OR_REQUIREMENTS}` — spec path if mentioned, else "General code review — no specific plan"
+- `{DESCRIPTION}` — same as WHAT_WAS_IMPLEMENTED
+- `{PLAN_OR_REQUIREMENTS}` — same as above (used twice in template)
+- `{BASE_SHA}` — resolved base SHA (omit for uncommitted scope)
+- `{HEAD_SHA}` — resolved head SHA
+- `{COMMIT_SHA}` — same as HEAD_SHA for commit scope; omit for other scopes
 
 ### Step 2: Dispatch coordinator in foreground (immediately after)
 

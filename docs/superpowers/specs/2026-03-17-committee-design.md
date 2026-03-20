@@ -83,17 +83,17 @@ Note on scope-to-CLI mapping: The coordinator maps the skill-provided context (S
 
 ### Phase 2: Verify Claims
 
-After all 4 reviews return, the coordinator dispatches a verifier subagent.
+After all 4 reviews return, the coordinator dispatches **one verifier per reviewer in parallel** (not a single shared verifier). Each verifier receives the file path for its reviewer's output and reads it directly — the coordinator never reads review content into its own context.
 
-**Review output handling:** Each reviewer writes its output to a temp file (e.g., `/tmp/committee-<session>/claude.md`, `codex.md`, `kiro.md`, `gemini.md`) rather than returning it directly into the coordinator's context. This gives the coordinator control over context management.
+**As-built deviations from original design:**
+- Session directories are project-relative (`.committee/session-XXXXXX/`) not `/tmp/` — subagents have Read tool access to the project directory
+- The summarizer subagent (`prompts/summarizer.md`) is defined but not currently invoked — per-reviewer verifiers each handle a single review file, so context budget is not a concern at that level
+- Claude reviewer is dispatched by the skill layer (not the coordinator) using `superpowers:code-reviewer`, which requires top-level session plugin access unavailable in nested subagents
 
-Before reading a review into context, the coordinator checks its line count (`wc -l`). The default assumption is that reviews are small enough to read directly. If a review is large (coordinator's judgment, but ~500 lines is a reasonable threshold), the coordinator dispatches a summarizer subagent to produce a condensed version instead of reading the full review into its own context. The summarizer gets the file path and returns a summary.
-
-**Verifier input:**
-- All 4 review outputs (read from temp files — full or summarized, depending on coordinator's judgment)
+**Verifier input (per reviewer):**
+- The file path to that reviewer's output
 - The git range or review scope
 - Full tool access (Read, Bash, Grep, Glob, etc.)
-- The temp file paths, so the verifier can read original reviews directly if needed
 
 **Verifier process:**
 

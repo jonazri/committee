@@ -22,7 +22,8 @@ All four reviewer CLIs must be installed and authenticated:
 /committee                              # Auto-detect scope
 /committee --base main                  # Review branch diff from main
 /committee --commit abc123              # Review specific commit
-/committee abc123..def456               # Review explicit SHA range
+/committee abc123..def456               # Review explicit SHA range (bare pattern)
+/committee --range abc123..def456       # Review explicit SHA range (flag form)
 /committee #123                         # Review PR #123
 /committee "review the auth changes"    # Vague — skill resolves scope from git history
 ```

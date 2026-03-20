@@ -17,6 +17,8 @@ Read this file first using the Read tool. Read it fully — your scope is limite
 
 Git range: `{BASE_SHA}..{HEAD_SHA}` (if available — use to read code and run verifications)
 
+**Uncommitted scope:** If BASE_SHA and HEAD_SHA are absent, verify claims using `git diff` (unstaged) and `git diff --staged` (staged changes) rather than a SHA range.
+
 ## Your Task
 
 1. Read the review file at `{REVIEW_FILE_PATH}`

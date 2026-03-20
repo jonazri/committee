@@ -12,7 +12,7 @@ You are the coordinator for a multi-perspective code review. You handle the exte
 
 Read `Session dir` from REVIEW_CONTEXT — `SESSION_DIR` is the project-relative session directory the skill created (e.g. `.committee/session-XXXXXX`). All review files live here.
 
-Claude's review is being written to `$SESSION_DIR/claude.md` by the background subagent. You will poll for it after dispatching the CLI reviewers.
+Claude's review is being written to `{SESSION_DIR}/claude.md` by the background subagent. You will poll for it after dispatching the CLI reviewers.
 
 ## Phase 1: Dispatch CLI Reviewers
 
@@ -81,7 +81,7 @@ The skill has already resolved the review scope and provided it in `{REVIEW_CONT
 - **Scope type: branch_diff** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, use `git diff {BASE_BRANCH}...HEAD`.
 - **Scope type: commit** → `codex review --commit {COMMIT_SHA}` (use `Commit SHA` from REVIEW_CONTEXT). For Kiro/Gemini, use `git show {COMMIT_SHA}`.
 - **Scope type: uncommitted** → `codex review --uncommitted`. For Kiro/Gemini, use `git diff` and `git diff --staged`.
-- **Scope type: pr** → Use `git merge-base {BASE_BRANCH} {HEAD_BRANCH}` to get the base SHA, then `codex review --commit {HEAD_BRANCH}` (HEAD_BRANCH = `refs/pull/<n>/head`). For Kiro/Gemini, use `git diff {BASE_BRANCH}...{HEAD_BRANCH}`. Note: `{HEAD_BRANCH}` here is `refs/pull/<n>/head` — a local ref created by the skill's `git fetch`.
+- **Scope type: pr** → `Base SHA` and `Head SHA` are pre-resolved by the skill. Use `codex exec --ephemeral -o "{SESSION_DIR}/codex.md" "prompt covering {BASE_SHA}..{HEAD_SHA}"` (same pattern as sha_range — reviews the full PR diff, not just the tip commit). For Kiro/Gemini, use `git diff {BASE_BRANCH}...{HEAD_BRANCH}` (or `git diff {BASE_SHA}..{HEAD_SHA}`).
 - **Scope type: sha_range** → `codex exec --ephemeral -o FILE "prompt with {BASE_SHA}..{HEAD_SHA}"`. For Kiro/Gemini, instruct them to run `git diff {BASE_SHA}..{HEAD_SHA}`.
 
 ## Wait for Claude
@@ -89,14 +89,14 @@ The skill has already resolved the review scope and provided it in `{REVIEW_CONT
 After all three CLI reviewers complete (or timeout), poll for Claude's review file:
 
 ```bash
-for i in $(seq 1 10); do
-  [ -f "$SESSION_DIR/claude.md" ] && break
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  [ -f "{SESSION_DIR}/claude.md" ] && break
   sleep 30
 done
 ```
-(`$SESSION_DIR` is a shell variable — substitute the actual path from REVIEW_CONTEXT before running.)
+(Uses shell built-in loop — no `seq` needed. `{SESSION_DIR}` = substitute the actual path from REVIEW_CONTEXT.)
 
-If `$SESSION_DIR/claude.md` still does not exist after the loop, record: "Claude: review not received within polling window (5 minutes)".
+If `{SESSION_DIR}/claude.md` still does not exist after the loop, record: "Claude: review not received within polling window (5 minutes)".
 
 ## Phase 2: Verify Claims
 
@@ -123,8 +123,10 @@ After all reviewers complete (or fail), collect the results.
 **Successful reviews are not shown** — insufficient reviewer diversity for a reliable committee review.
 ```
 ```bash
-rm -rf "$SESSION_DIR"
+rm -rf "{SESSION_DIR}"
+git update-ref -d {PR_CLEANUP_REF} 2>/dev/null || true
 ```
+(Include the `git update-ref` line only if `PR cleanup ref` is present in REVIEW_CONTEXT.)
 
 **If quorum met:** Dispatch one verifier per reviewer in parallel — single message, multiple Agent tool calls. Each verifier reads its own review file directly; the coordinator never reads review content.
 
@@ -188,7 +190,7 @@ Synthesize into this format:
 
 After producing the report, clean up:
 ```bash
-rm -rf "$SESSION_DIR"
+rm -rf "{SESSION_DIR}"
 ```
 
 If scope type was `pr`, also delete the fetched PR ref to avoid leaving stale refs in the repo:
