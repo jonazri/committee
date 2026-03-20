@@ -59,6 +59,8 @@ Note: Claude is dispatched by the skill (top-level, has plugin access) using `su
 
 **Kiro network dependency** — Kiro connects to an external AWS service (`q.us-east-1.amazonaws.com`). It will fail with a network error in offline environments or if that service is unavailable. Treat Kiro as best-effort.
 
+**Kiro `profile_name` log error** — kiro-cli logs `Failed to get auth profile: missing field profile_name` on every non-interactive call. This is an [upstream bug](https://github.com/kirodotdev/Kiro/issues/6170) caused by a camelCase/snake_case mismatch in the stored profile JSON. The error is non-fatal — kiro-cli falls back and works normally. If Kiro starts failing with actual connection errors, check `~/.aws/sso/cache/kiro-auth-token.json` for an expired token and re-login with `kiro-cli login`.
+
 **Background task noise** — The coordinator uses background tasks internally to run CLI reviewers in parallel. When the coordinator subagent finishes, stale task-completion notifications may surface in the parent Claude Code session. These are harmless — the coordinator already processed their results before returning.
 
 **Session directories** — Each run creates `.committee/session-XXXXXX/` in the project root. These are gitignored and cleaned up on completion. If a run is interrupted abnormally, orphaned session dirs may remain — safe to delete manually.
