@@ -101,7 +101,7 @@ After all 4 reviews return, the coordinator dispatches **one verifier per review
 2. Exercise judgment on verification depth per claim:
    - **Read code** for factual assertions about what code does/doesn't do
    - **Run tests** when a reviewer questions test correctness or coverage
-   - **Cross-reference reviewers** to flag contradictions
+   - **Note:** Cross-reviewer contradiction detection is handled by the coordinator's synthesis step, not individual verifiers. Each verifier only sees one reviewer's output.
    - **Skip verification** for subjective opinions, style preferences, suggestions
 3. Tag each claim:
    - **Confirmed** — evidence supports the claim (cite file:line or test output)
@@ -160,20 +160,26 @@ Rules:
 
 ```
 committee/
-├── skills/
-│   └── committee/
-│       └── SKILL.md              # The /committee skill (thin launcher)
+├── .claude/
+│   └── skills/
+│       └── committee/
+│           └── SKILL.md          # The /committee skill (installed here for Claude Code to discover)
 ├── prompts/
 │   ├── coordinator.md            # Coordinator subagent prompt template
-│   ├── verifier.md               # Verifier subagent prompt template
+│   ├── verifier.md               # Verifier subagent prompt template (one per reviewer, parallel)
+│   ├── summarizer.md             # Summarizer prompt (reserved, not currently invoked)
 │   └── reviewers/
-│       ├── kiro.md               # Review prompt for kiro-cli
-│       └── gemini.md             # Review prompt for gemini code-review
+│       ├── claude.md             # Claude review prompt (fallback when superpowers plugin unavailable)
+│       ├── kiro.md               # Kiro review prompt (freeform chat, needs context)
+│       └── gemini.md             # Gemini review prompt (freeform chat, needs context)
+├── .committee/                   # Session directories (gitignored, created at runtime)
 ├── CLAUDE.md                     # Project conventions, prerequisites
 └── docs/
     └── superpowers/
-        └── specs/
-            └── 2026-03-17-committee-design.md
+        ├── specs/
+        │   └── 2026-03-17-committee-design.md
+        └── plans/
+            └── 2026-03-17-committee-plan.md
 ```
 
 Notes:

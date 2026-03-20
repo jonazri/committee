@@ -18,7 +18,7 @@
 
 ### What's Done
 
-All 6 implementation tasks complete. Final commit: `88125d9`.
+All 6 implementation tasks complete. Multiple iterative review+fix cycles followed. See git log for full history.
 
 | Task | File | Status |
 |------|------|--------|
@@ -49,7 +49,9 @@ Then verify the report contains: `## Committee Code Review` header, scope info, 
 
 3. **`--range` and bare SHA range detection added to skill** — The spec's scope table lists only `--base`, `--commit`, `--uncommitted`, and PR as input modes. Added `--range <sha1>..<sha2>` and bare `sha1..sha2` pattern detection to support arbitrary SHA ranges. Codex is automatically skipped for this scope type (no native support).
 
-4. **`{GIT_RANGE_INSTRUCTIONS}` kept as freeform placeholder** — A reviewer suggested replacing it with raw `{BASE_SHA}`/`{HEAD_SHA}` placeholders. Pushed back: the coordinator fills it with human-readable git commands (e.g. "Run `git diff main...HEAD`"), which is intentionally more helpful for Kiro/Gemini than raw SHAs.
+4. **Codex timeout increased from 5 min to 10 min** — gpt-5.4 with xhigh reasoning takes ~5 min for small commits. 10-minute timeout documented in CLAUDE.md.
+
+5. **`{GIT_RANGE_INSTRUCTIONS}` kept as freeform placeholder** — A reviewer suggested replacing it with raw `{BASE_SHA}`/`{HEAD_SHA}` placeholders. Pushed back: the coordinator fills it with human-readable git commands (e.g. "Run `git diff main...HEAD`"), which is intentionally more helpful for Kiro/Gemini than raw SHAs.
 
 ### Known Issues (resolved 2026-03-19)
 

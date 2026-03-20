@@ -86,7 +86,7 @@ gh pr view <number> --json title,baseRefName,headRefName,url
 git fetch origin "refs/pull/<number>/head:refs/pull/<number>/head"
 
 # Resolve SHAs — skill is the source of truth, coordinator must not re-resolve
-BASE_SHA=$(git merge-base <baseRefName> refs/pull/<number>/head)
+BASE_SHA=$(git merge-base origin/<baseRefName> refs/pull/<number>/head)
 HEAD_SHA=$(git rev-parse refs/pull/<number>/head)
 
 gh pr diff <number> --stat
@@ -174,7 +174,7 @@ The skill dispatches Claude in the background and the coordinator in the foregro
 
 ### Step 1: Dispatch Claude reviewer in background
 
-Dispatch via Agent tool with `subagent_type: "superpowers:code-reviewer"` and `run_in_background: true`:
+Dispatch via Agent tool with `subagent_type: "superpowers:code-reviewer"` and `run_in_background: true`. Note: Agent tool has no explicit timeout — the coordinator's 10-minute polling window (20 × 30s) is the effective cap:
 - WHAT_WAS_IMPLEMENTED: The changes being reviewed (use the scope description)
 - PLAN_OR_REQUIREMENTS: Check the user's original input for a spec or plan file path. If referenced, use it. Otherwise: "General code review — no specific plan".
 - BASE_SHA: The resolved base SHA (omit for uncommitted scope)
@@ -187,9 +187,8 @@ Append to the prompt: "Write your complete review to `<SESSION_DIR>/claude.md` u
 
 **Fallback:** If the background dispatch fails, dispatch `general-purpose` instead with the prompt template at `prompts/reviewers/claude.md`, filling in these placeholders (also in background):
 - `{WHAT_WAS_IMPLEMENTED}` — scope description
-- `{PLAN_OR_REQUIREMENTS}` — spec path if mentioned, else "General code review — no specific plan"
+- `{PLAN_OR_REQUIREMENTS}` — spec path if mentioned, else "General code review — no specific plan" (appears twice in template — fill both with the same value)
 - `{DESCRIPTION}` — same as WHAT_WAS_IMPLEMENTED
-- `{PLAN_OR_REQUIREMENTS}` — same as above (used twice in template)
 - `{BASE_SHA}` — resolved base SHA (omit for uncommitted scope)
 - `{HEAD_SHA}` — resolved head SHA
 - `{COMMIT_SHA}` — same as HEAD_SHA for commit scope; omit for other scopes
@@ -204,7 +203,7 @@ Construct the `{REVIEW_CONTEXT}` section from the resolved context:
 Scope type: <branch_diff | commit | uncommitted | pr | sha_range>
 Scope: <human-readable description>
 Base SHA: <resolved SHA or "none" for uncommitted>
-Head SHA: <resolved SHA>
+Head SHA: <resolved SHA or "none" for uncommitted>
 Commit SHA: <resolved SHA, for commit scope only>
 Base branch: <branch name, if applicable>
 Head branch: <refs/pull/<n>/head for PR scope, or remote branch name otherwise>

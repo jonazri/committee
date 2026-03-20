@@ -17,7 +17,7 @@ Read this file first using the Read tool. Read it fully — your scope is limite
 
 Git range: `{BASE_SHA}..{HEAD_SHA}` (if available — use to read code and run verifications)
 
-**Uncommitted scope:** If BASE_SHA and HEAD_SHA are absent, verify claims using `git diff` (unstaged) and `git diff --staged` (staged changes) rather than a SHA range.
+**If BASE_SHA or HEAD_SHA are literal `{BASE_SHA}` / `{HEAD_SHA}` or `none`:** these are unfilled or absent. Do not attempt to run `git diff {BASE_SHA}..{HEAD_SHA}` — it will fail. Instead use `git diff` (unstaged) and `git diff --staged` (staged changes) for uncommitted scope, or read the diff file directly from the session directory.
 
 ## Your Task
 
