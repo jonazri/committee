@@ -114,39 +114,23 @@ For Claude, check the `Claude review` field in REVIEW_CONTEXT. If it says `REVIE
 rm -rf "$SESSION_DIR"
 ```
 
-**If quorum met:** Check the size of each review file individually before reading into your context:
+**If quorum met:** Dispatch one verifier per reviewer in parallel — single message, multiple Agent tool calls. Each verifier reads its own review file directly; the coordinator never reads review content.
 
-```bash
-wc -l "{SESSION_DIR}/claude.md" 2>/dev/null
-wc -l "{SESSION_DIR}/codex.md" 2>/dev/null
-wc -l "{SESSION_DIR}/kiro.md" 2>/dev/null
-wc -l "{SESSION_DIR}/gemini.md" 2>/dev/null
-```
-
-(Run per-file so the line count is unambiguously attributed to each reviewer, even if some files are missing.)
-
-**Context management:** For each review file:
-- **If the file is under 500 lines:** Read it directly into your context.
-- **If the file is 500 lines or more:** Dispatch a summarizer subagent with the prompt template at `prompts/summarizer.md`. Fill in `{REVIEW_FILE_PATH}` and `{REVIEWER_NAME}`. The summarizer returns a condensed summary preserving all file:line references, concrete claims, and findings.
-
-Read the verifier prompt template at `prompts/verifier.md`. Fill in:
+Read the verifier prompt template at `prompts/verifier.md`. For each reviewer that succeeded, fill in and dispatch a separate Agent call:
+- `{REVIEWER_NAME}` — "Claude", "Codex", "Kiro", or "Gemini"
+- `{REVIEW_FILE_PATH}` — path to the review file (e.g. `$SESSION_DIR/claude.md`)
 - `{SCOPE_DESCRIPTION}` — same as what you gave reviewers
 - `{BASE_SHA}` and `{HEAD_SHA}` — the git range
-- `{SESSION_DIR}` — the temp directory path
-- `{CLAUDE_REVIEW}` — review content or "REVIEWER FAILED: <reason>". If summarized, prepend `[SUMMARIZED — original at {SESSION_DIR}/claude.md]`
-- `{CODEX_REVIEW}` — same (mark `[SUMMARIZED]` if applicable)
-- `{KIRO_REVIEW}` — same
-- `{GEMINI_REVIEW}` — same
 
-Dispatch the verifier as a subagent via the Agent tool. Wait for it to return. Note: Agent tool subagents do not support explicit timeouts — the verifier runs until it finishes. For large diffs with many claims, this may take several minutes.
+For reviewers that failed, skip dispatching a verifier — record the failure in the synthesis header instead.
 
-**Verifier failure:** If the verifier Agent call errors or returns no usable output, proceed to Phase 3 without verification annotations. Note in the report header: "⚠️ Verification step failed — findings shown without confirmation status."
+Dispatch all verifiers in a single message. Wait for all to return. If any individual verifier Agent call errors, note it in the report but proceed with the others.
 
 ## Phase 3: Synthesize
 
 Now produce the final report. You have:
-- The raw review outputs (in temp files)
-- The verifier's annotated claims (or none, if verification failed)
+- 4 compact annotated claim lists from the verifiers (one per reviewer), or fewer if some failed
+- The coordinator never read the raw reviews — work only from the verified claim lists
 
 Synthesize into this format:
 
@@ -182,11 +166,12 @@ Synthesize into this format:
 ```
 
 **Synthesis rules:**
-- **Deduplicate.** Same issue from multiple reviewers = one entry, multiple attributions.
+- **Deduplicate.** Same issue from multiple reviewers = one entry, multiple attributions (e.g. "Flagged by: Claude, Kiro").
+- **Detect contradictions.** If Reviewer A's claim was Confirmed but Reviewer B made the opposite claim (also Confirmed or Refuted), flag it in the Contradictions section. The individual per-reviewer verifiers don't cross-reference — that's your job here.
 - **Keep refuted claims.** Show them in their severity section so the user sees what was checked and dismissed.
 - **Assign severity from evidence.** A reviewer calling something "critical" that the verifier refuted → downgrade or keep with ❌ status.
 - **Omit empty sections.** If no Critical findings, skip that section entirely.
-- **Be honest about failures.** If a reviewer failed, say so in the header.
+- **Be honest about failures.** If a reviewer or verifier failed, say so in the header.
 
 After producing the report, clean up:
 ```bash

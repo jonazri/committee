@@ -41,6 +41,10 @@ All four reviewer CLIs must be installed and authenticated:
 
 Note: Claude is dispatched by the skill (top-level, has plugin access) using `superpowers:code-reviewer` directly — not by the coordinator. The coordinator only handles Codex, Kiro, and Gemini. `prompts/reviewers/claude.md` is a fallback for when the plugin is unavailable. Codex uses `codex review` (branch/commit/uncommitted) or `codex exec` (sha_range). Only Kiro and Gemini need prompt templates because they're invoked via freeform CLI.
 
+## Architectural Notes
+
+**Potential improvement — Claude as CLI subprocess:** Instead of the skill dispatching `superpowers:code-reviewer` before the coordinator (sequential), the coordinator could invoke `claude -p "$PROMPT" > $SESSION_DIR/claude.md 2>&1` via Bash in parallel with Codex/Kiro/Gemini. A `claude` subprocess inherits `~/.claude/` config and therefore has plugin/agent access — `--agent code-reviewer` (if a user-level agent exists at `~/.claude/agents/`) would use the real code-reviewer definition. This would make all 4 reviewers run in parallel, reduce total time by Claude's review duration (~2 min), and simplify the skill back to a thin launcher. Not yet implemented; the current sequential approach is simpler and correct.
+
 ## Known Limitations
 
 **Codex slowness** — Codex uses `gpt-5.4` with `xhigh` reasoning effort and takes ~5–10 minutes even for small diffs. The coordinator allows 10 minutes. For large diffs, Codex may still time out — the other 3 reviewers maintain quorum.
