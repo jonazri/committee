@@ -35,17 +35,19 @@ Git range: `{BASE_SHA}..{HEAD_SHA}` (if available — use to read code and run v
 
 Return only the structured claim list below. Do not add new findings. Do not produce a full review report.
 
+Include the reviewer's original severity tag on each claim so the coordinator can preserve it in synthesis.
+
 ```
 ### {REVIEWER_NAME} Claims
 
 #### Confirmed
-- **<claim summary>** — Evidence: `<file:line>` — <one sentence explanation>
+- **<claim summary>** [Critical|Important|Minor] — Evidence: `<file:line>` — <one sentence explanation>
 
 #### Refuted
-- **<claim summary>** — Evidence: `<file:line>` — <what you found instead>
+- **<claim summary>** [Critical|Important|Minor] — Evidence: `<file:line>` — <what you found instead>
 
 #### Unverifiable
-- **<claim summary>** — Reason: <why it can't be practically checked>
+- **<claim summary>** [Critical|Important|Minor|Unknown] — Reason: <why it can't be practically checked>
 ```
 
 If the reviewer had no claims (empty review or failure), say so explicitly.

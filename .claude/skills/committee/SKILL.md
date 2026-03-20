@@ -46,13 +46,15 @@ git status --porcelain
 git rev-parse --abbrev-ref HEAD
 
 # Detect default branch — remote tracking ref is most reliable
-git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || \
-git remote show origin 2>/dev/null | grep 'HEAD branch' | awk '{print $NF}' || \
-# Last resort: check for common names
-git rev-parse --verify main >/dev/null 2>&1 && echo "main" || \
-git rev-parse --verify master >/dev/null 2>&1 && echo "master"
-# Note: checking local main/master last — a stray local branch with that
-# name does not mean it's the default upstream branch
+git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||'
+# If that fails, try network (slower):
+git remote show origin 2>/dev/null | grep 'HEAD branch' | awk '{print $NF}'
+# Last resort — local branch names only (use if/elif to avoid printing both):
+if git rev-parse --verify main >/dev/null 2>&1; then
+  echo "main"
+elif git rev-parse --verify master >/dev/null 2>&1; then
+  echo "master"
+fi
 
 # If on a feature branch, get the diff stat vs default branch
 git diff --stat <default_branch>...HEAD
@@ -109,32 +111,36 @@ Adjust the estimate based on scope: a single commit is ~5–8 min; a large multi
 
 ## Setup
 
-Create a temp directory for reviewer outputs. The skill creates this — not the coordinator — because the Claude reviewer is dispatched here.
+Create the session directory in the project root (`.committee/` subdirectory). This ensures all subagents — including verifiers — can access review files via the Read tool, which has project directory access but not `/tmp`.
 
 ```bash
-SESSION_DIR=$(mktemp -d /tmp/committee-XXXXXX) && echo "$SESSION_DIR"
+mkdir -p .committee
+SESSION_DIR=$(mktemp -d .committee/session-XXXXXX) && echo "$SESSION_DIR"
+trap 'rm -rf "$SESSION_DIR"' EXIT
 ```
 
 Note the SESSION_DIR path. You will write Claude's review here and pass it to the coordinator.
 
-## Dispatch Claude Reviewer
+## Dispatch Claude Reviewer and Coordinator (in parallel)
 
-The skill runs at the top level of the Claude Code session where `superpowers:code-reviewer` is available. Dispatch it here, before the coordinator, so the coordinator doesn't need plugin access.
+The skill dispatches Claude in the background and the coordinator in the foreground simultaneously. This means Claude and the CLI reviewers (Codex, Kiro, Gemini) all run in parallel — saving ~2 minutes vs. running Claude first.
 
-Dispatch via Agent tool with `subagent_type: "superpowers:code-reviewer"`:
+### Step 1: Dispatch Claude reviewer in background
+
+Dispatch via Agent tool with `subagent_type: "superpowers:code-reviewer"` and `run_in_background: true`:
 - WHAT_WAS_IMPLEMENTED: The changes being reviewed (use the scope description)
 - PLAN_OR_REQUIREMENTS: Check the user's original input for a spec or plan file path. If referenced, use it. Otherwise: "General code review — no specific plan".
 - BASE_SHA: The resolved base SHA (omit for uncommitted scope)
 - HEAD_SHA: The resolved head SHA
 - DESCRIPTION: Human-readable scope description
 
+Append to the prompt: "Write your complete review to `<SESSION_DIR>/claude.md` using the Write tool before returning." (substitute the actual SESSION_DIR path)
+
 **Uncommitted scope:** Omit BASE_SHA/HEAD_SHA and describe the uncommitted changes in WHAT_WAS_IMPLEMENTED instead.
 
-**Fallback:** If the Agent tool returns an error (plugin not available), dispatch `general-purpose` instead with the prompt template at `prompts/reviewers/claude.md`, filling in the same placeholders.
+**Fallback:** If the background dispatch fails, dispatch `general-purpose` instead with the prompt template at `prompts/reviewers/claude.md`, filling in the same placeholders (also in background).
 
-**After the subagent returns:** Write its response to `$SESSION_DIR/claude.md` using the Write tool. Record whether this succeeded or failed.
-
-## Dispatch Coordinator
+### Step 2: Dispatch coordinator in foreground (immediately after)
 
 Read the coordinator prompt template at `prompts/coordinator.md`.
 
@@ -145,13 +151,14 @@ Scope type: <branch_diff | commit | uncommitted | pr | sha_range>
 Scope: <human-readable description>
 Base SHA: <resolved SHA or "none" for uncommitted>
 Head SHA: <resolved SHA>
+Commit SHA: <resolved SHA, for commit scope only>
 Base branch: <branch name, if applicable>
 Head branch: <PR head branch name, if PR scope>
 PR number: <if applicable>
 Diff stat:
 <output of the diff --stat command>
 Session dir: <the SESSION_DIR path>
-Claude review: <"ready" if claude.md was written successfully, or "REVIEWER FAILED: <reason>">
+Claude review: background (coordinator must poll for SESSION_DIR/claude.md)
 User's original input: <the raw args passed to /committee>
 ```
 

@@ -35,7 +35,8 @@ All four reviewer CLIs must be installed and authenticated:
 - `prompts/reviewers/claude.md` — Claude review prompt (embedded directly; plugin subagent types unavailable in nested subagent context)
 - `prompts/reviewers/kiro.md` — Kiro review prompt (Kiro uses freeform chat, needs context)
 - `prompts/reviewers/gemini.md` — Gemini review prompt (Gemini uses freeform chat, needs context)
-- `prompts/summarizer.md` — Summarizer subagent prompt (used when a review exceeds 500 lines)
+- `prompts/summarizer.md` — Summarizer subagent prompt (available but not currently wired in; each verifier handles its own single review file so no summarization is needed)
+- `.committee/` — Session directories created at runtime (gitignored); each run creates `.committee/session-XXXXXX/`
 - `docs/superpowers/specs/` — Design spec
 - `docs/superpowers/plans/` — Implementation plan
 
@@ -43,7 +44,9 @@ Note: Claude is dispatched by the skill (top-level, has plugin access) using `su
 
 ## Architectural Notes
 
-**Potential improvement — Claude as CLI subprocess:** Instead of the skill dispatching `superpowers:code-reviewer` before the coordinator (sequential), the coordinator could invoke `claude -p "$PROMPT" > $SESSION_DIR/claude.md 2>&1` via Bash in parallel with Codex/Kiro/Gemini. A `claude` subprocess inherits `~/.claude/` config and therefore has plugin/agent access — `--agent code-reviewer` (if a user-level agent exists at `~/.claude/agents/`) would use the real code-reviewer definition. This would make all 4 reviewers run in parallel, reduce total time by Claude's review duration (~2 min), and simplify the skill back to a thin launcher. Not yet implemented; the current sequential approach is simpler and correct.
+**Claude parallelism** — Claude is dispatched by the skill in the background while the coordinator simultaneously starts the CLI reviewers. The coordinator polls for `claude.md` before verification. All 4 reviewers run in parallel.
+
+**Potential future improvement — Claude as CLI subprocess:** The coordinator could invoke `claude -p "$PROMPT"` via Bash directly, inheriting `~/.claude/` config including plugins. This would remove the need for the skill to handle Claude separately, making it a thin launcher again. Not yet implemented.
 
 ## Known Limitations
 
@@ -57,4 +60,4 @@ Note: Claude is dispatched by the skill (top-level, has plugin access) using `su
 
 **Background task noise** — The coordinator uses background tasks internally to run CLI reviewers in parallel. When the coordinator subagent finishes, stale task-completion notifications may surface in the parent Claude Code session. These are harmless — the coordinator already processed their results before returning.
 
-**Summaries lose origin context** — When a review exceeds 500 lines and gets summarized, the verifier receives the summary without knowing which claims came from the full text vs. were dropped by summarization. The verifier can read original files via `{SESSION_DIR}`, but it won't do so automatically for every claim.
+**Session directories** — Each run creates `.committee/session-XXXXXX/` in the project root. These are gitignored and cleaned up on completion. If a run is interrupted abnormally, orphaned session dirs may remain — safe to delete manually.

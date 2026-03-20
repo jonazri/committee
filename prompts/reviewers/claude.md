@@ -27,6 +27,12 @@ git diff --stat {BASE_SHA}..{HEAD_SHA}
 git diff {BASE_SHA}..{HEAD_SHA}
 ```
 
+**Uncommitted scope:** If BASE_SHA is omitted or "none", review uncommitted changes instead:
+```bash
+git diff          # unstaged
+git diff --staged # staged
+```
+
 ## Review Checklist
 
 **Code Quality:**
