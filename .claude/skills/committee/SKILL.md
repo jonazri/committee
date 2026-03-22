@@ -14,7 +14,7 @@ The user invokes `/committee` with optional arguments. Parse them to determine r
 1. Check for explicit flags:
    - `--base <branch>` → branch diff
    - `--commit <sha>` → single commit
-   - `--range <sha1>..<sha2>` → explicit SHA range
+   - `--range <sha1>..<sha2>` → explicit SHA range (note: `...` three-dot is normalized to `..` two-dot — tell the user if this happens)
 2. Check for bare SHA range pattern (e.g. `abc123..def456` or `abc123...def456`):
    - Matches `[0-9a-f]{6,40}\.\.\.?[0-9a-f]{6,40}` (two or three dots) → SHA range
    - Note: three-dot (`...`) symmetric diff semantics are not preserved — both are resolved as `sha1..sha2` two-dot range. Tell the user if they used `...` so they know the semantics shifted.
@@ -77,7 +77,11 @@ git diff --stat <branch>...HEAD
 git rev-parse <sha>            # resolve to full SHA
 git show --stat <sha>
 ```
-Set `Base SHA = <sha>~1` and `Head SHA = <sha>` in REVIEW_CONTEXT so verifiers have a concrete range.
+Set `Head SHA = <sha>` in REVIEW_CONTEXT. For `Base SHA`, use `<sha>~1` — but check first:
+```bash
+git rev-parse <sha>~1 2>/dev/null || echo "none"
+```
+If the commit is the repo's initial commit, `<sha>~1` doesn't exist — set `Base SHA: none` and the verifier will fall back to reading the diff file.
 
 **For PR (`#123` or PR URL):**
 ```bash
@@ -110,6 +114,8 @@ git log --oneline --all --grep="<keywords>" | head -10
 git log --oneline -10 --name-only
 # Determine the appropriate scope type and resolve SHAs
 ```
+
+**Shell safety:** When constructing bash commands with branch names, PR refs, or user-provided strings, always quote them in the bash command (e.g., `git merge-base "origin/$BASE_REF" "refs/pull/$NUM/head"`). Branch names can contain characters that are valid in git but dangerous in shell.
 
 Always resolve to concrete SHAs. If you cannot resolve the scope, tell the user what's ambiguous rather than dispatching with incomplete context. For example:
 
@@ -146,8 +152,8 @@ git diff --stat {BASE_SHA}..{HEAD_SHA} > "{SESSION_DIR}/diff_stat.txt" 2>&1
 
 For uncommitted scope:
 ```bash
-(git diff; git diff --staged) > "{SESSION_DIR}/diff.txt" 2>&1
-(git diff --stat; git diff --staged --stat) > "{SESSION_DIR}/diff_stat.txt" 2>&1
+git diff HEAD > "{SESSION_DIR}/diff.txt" 2>&1
+git diff --stat HEAD > "{SESSION_DIR}/diff_stat.txt" 2>&1
 ```
 
 For commit scope:

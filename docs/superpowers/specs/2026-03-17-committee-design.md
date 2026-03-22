@@ -53,10 +53,11 @@ The skill always resolves to concrete git context before dispatching the coordin
 
 ### What the Skill Does NOT Do
 
-- Read diffs
-- Review code
-- Make judgments about scope
-- Anything beyond launching the coordinator
+- Review code (that's the reviewers' job)
+- Synthesize or produce the final report (that's the coordinator's job)
+- Run verifiers (that's the coordinator's job)
+
+Note: The skill DOES resolve scope, precompute diffs, present the trust dialog, and dispatch the Claude reviewer. These responsibilities grew from the original "thin launcher" design as constraints were discovered (plugin access, session directory ownership, diff precomputation for security).
 
 ## Coordinator Subagent
 

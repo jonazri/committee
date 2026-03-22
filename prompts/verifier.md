@@ -6,6 +6,7 @@ You are verifying claims from a single code reviewer. Your job is to assess thei
 
 **Reviewer:** {REVIEWER_NAME}
 **Review file:** {REVIEW_FILE_PATH}
+**Session directory:** {SESSION_DIR} (contains precomputed diff.txt and diff_stat.txt if needed)
 
 Read this file first using the Read tool. Read it fully — your scope is limited to one reviewer so there is no context budget concern here.
 
