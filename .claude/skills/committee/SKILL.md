@@ -306,4 +306,7 @@ This will guide you to treat the committee report as external reviewer feedback 
 
 After evaluation, present the report to the user with any technically unsound or questionable findings annotated with your assessment.
 
+**CRITICAL — recommendations only, no implementation:**
+The committee report is advisory. You MUST NOT implement any suggestions, make any code changes, or take any action on the findings without the user's explicit consent. Present the report, then wait for the user to decide what to act on. Do not say "let me fix these" or start editing files. The user drives what happens next.
+
 If the coordinator reports an abort (quorum not met), display that message instead — no evaluation needed.
