@@ -26,6 +26,8 @@ All four reviewer CLIs must be installed and authenticated:
 /committee --range abc123..def456       # Review explicit SHA range (flag form)
 /committee #123                         # Review PR #123
 /committee "review the auth changes"    # Vague — skill resolves scope from git history
+/committee --files src/auth.ts src/db.ts # Review specific files (not a diff)
+/committee --plan docs/plan.md          # Review an implementation plan
 ```
 
 ## Project Structure

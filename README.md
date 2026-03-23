@@ -80,7 +80,23 @@ echo ".committee/" >> .gitignore
 /committee --range abc123..def456       # Explicit SHA range (flag form)
 /committee #123                         # Review PR #123
 /committee "review the auth changes"    # Vague — skill resolves from git history
+/committee --files src/auth.ts src/db.ts # Review specific files (not a diff)
+/committee --plan docs/plan.md          # Review an implementation plan
+/committee --plan plan.md --spec spec.md # Review plan against a spec
 ```
+
+### File Review (`--files`)
+
+Reviews standalone files for code quality, bugs, design, and security — not as a git diff, but as complete source files. Useful for reviewing files that aren't part of a recent commit, imported code, or generated output.
+
+### Plan Review (`--plan`)
+
+Reviews an implementation plan for completeness, feasibility, task decomposition, architectural soundness, and whether an implementing agent could follow it. Optionally cross-references against a spec file. Review criteria shift from code quality to plan quality:
+- Are tasks atomic and actionable?
+- Are file paths and code examples concrete?
+- Are edge cases and error handling covered?
+- Does the plan violate YAGNI?
+- Could an implementing agent follow this without ambiguity?
 
 ### Trust Level
 

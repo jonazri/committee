@@ -104,6 +104,8 @@ The skill has already resolved the review scope and provided it in `{REVIEW_CONT
 - **Scope type: uncommitted** → `codex review --uncommitted`. For Kiro/Gemini, use `git diff` and `git diff --staged`.
 - **Scope type: pr** → `Base SHA` and `Head SHA` are pre-resolved by the skill. Write codex prompt to file, use `codex exec --ephemeral -o FILE - < prompt_file` (same as sha_range). For Kiro/Gemini, use `git diff {BASE_SHA}..{HEAD_SHA}` (pre-resolved SHAs, not branch names — avoids stale local ref issues).
 - **Scope type: sha_range** → Write codex prompt to file, use `codex exec --ephemeral -o FILE - < prompt_file`. For Kiro/Gemini, reference the diff file or `git diff {BASE_SHA}..{HEAD_SHA}`.
+- **Scope type: files** → No git diff needed. Write codex prompt to file: "Review the following source files for code quality, bugs, design, and security. The files are provided in {SESSION_DIR}/diff.txt, each preceded by a `=== FILE: <path> ===` header." Use `codex exec --ephemeral -o FILE - < prompt_file`. For Kiro/Gemini, set `{GIT_RANGE_INSTRUCTIONS}` to: "Read {SESSION_DIR}/diff.txt — it contains the source files to review, each with a file header."
+- **Scope type: plan** → No git diff needed. Write codex prompt to file: "Review the following implementation plan for completeness, feasibility, task decomposition, architectural soundness, missing edge cases, and YAGNI violations. The plan is in {SESSION_DIR}/diff.txt." Use `codex exec --ephemeral -o FILE - < prompt_file`. For Kiro/Gemini, set `{GIT_RANGE_INSTRUCTIONS}` to: "Read {SESSION_DIR}/diff.txt — it contains an implementation plan to review. Evaluate completeness, feasibility, task granularity, and whether an implementing agent could follow it without ambiguity."
 
 ## Wait for Claude
 
