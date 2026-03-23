@@ -200,7 +200,7 @@ Append to the prompt: "Write your complete review to `<SESSION_DIR>/claude.md` u
 
 **Uncommitted scope:** Omit BASE_SHA/HEAD_SHA and describe the uncommitted changes in WHAT_WAS_IMPLEMENTED instead.
 
-**Fallback:** If the background dispatch fails, dispatch `general-purpose` instead with the prompt template at `prompts/reviewers/claude.md`, filling in these placeholders (also in background):
+**Fallback:** If the background dispatch fails, dispatch `general-purpose` instead with the prompt template at `prompts/reviewers/claude.md` (or `~/.claude/skills/committee/prompts/reviewers/claude.md` for user-scope), filling in these placeholders (also in background):
 - `{WHAT_WAS_IMPLEMENTED}` — scope description
 - `{PLAN_OR_REQUIREMENTS}` — spec path if mentioned, else "General code review — no specific plan" (appears twice in template — fill both with the same value)
 - `{DESCRIPTION}` — same as WHAT_WAS_IMPLEMENTED
@@ -210,7 +210,9 @@ Append to the prompt: "Write your complete review to `<SESSION_DIR>/claude.md` u
 
 ### Step 2: Dispatch coordinator in foreground (immediately after)
 
-Read the coordinator prompt template at `prompts/coordinator.md`.
+Read the coordinator prompt template. Check these locations in order:
+1. `prompts/coordinator.md` (project-scope install)
+2. `~/.claude/skills/committee/prompts/coordinator.md` (user-scope install)
 
 Construct the `{REVIEW_CONTEXT}` section from the resolved context:
 

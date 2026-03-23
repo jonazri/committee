@@ -49,7 +49,7 @@ Note: `codex exec` uses gpt-5.4/xhigh — allow the full 10-minute timeout.
 
 ### Reviewer 2: Kiro
 
-Read the prompt template at `prompts/reviewers/kiro.md`. Fill in the placeholders:
+Read the prompt template at `prompts/reviewers/kiro.md` (or `~/.claude/skills/committee/prompts/reviewers/kiro.md` if not found). Fill in the placeholders:
 - `{SCOPE_DESCRIPTION}` — describe the changes
 - `{GIT_RANGE_INSTRUCTIONS}` — depends on trust level (see below)
 - `{ADDITIONAL_CONTEXT}` — if the user's original input references a spec or plan file, add "Also read <path> to understand the design requirements." Otherwise leave blank.
@@ -74,7 +74,7 @@ Kiro reads its instructions from the file. Can read files and execute shell comm
 
 ### Reviewer 3: Gemini
 
-Read the prompt template at `prompts/reviewers/gemini.md`. Fill in the placeholders (same as Kiro).
+Read the prompt template at `prompts/reviewers/gemini.md` (or `~/.claude/skills/committee/prompts/reviewers/gemini.md` if not found). Fill in the placeholders (same as Kiro).
 
 Write the filled prompt to `{SESSION_DIR}/gemini_prompt.txt` first, then dispatch.
 
@@ -154,7 +154,7 @@ git update-ref -d {PR_CLEANUP_REF} 2>/dev/null || true
 
 **If quorum met:** Dispatch one verifier per reviewer in parallel — single message, multiple Agent tool calls. Each verifier reads its own review file directly; the coordinator never reads review content.
 
-Read the verifier prompt template at `prompts/verifier.md`. For each reviewer that succeeded, fill in and dispatch a separate Agent call:
+Read the verifier prompt template at `prompts/verifier.md` (or `~/.claude/skills/committee/prompts/verifier.md` if not found). For each reviewer that succeeded, fill in and dispatch a separate Agent call:
 - `{REVIEWER_NAME}` — "Claude", "Codex", "Kiro", or "Gemini"
 - `{REVIEW_FILE_PATH}` — path to the review file (e.g. `.committee/session-XXXXXX/claude.md`)
 - `{SESSION_DIR}` — the session directory path (contains diff.txt, diff_stat.txt)
