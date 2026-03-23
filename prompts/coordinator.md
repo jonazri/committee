@@ -63,12 +63,19 @@ kiro-cli chat --no-interactive --trust-tools=fs_read "Read {SESSION_DIR}/kiro_pr
 ```
 Kiro reads its instructions from the file. Can read files but cannot execute shell commands.
 
+**If Trust level = nah (sandboxed):**
+Set `{GIT_RANGE_INSTRUCTIONS}` to: "Run `git diff {BASE_SHA}..{HEAD_SHA}` to see the changes." (same as full-access — nah guards the execution, not the prompt).
+```bash
+kiro-cli chat --no-interactive --trust-all-tools "Read {SESSION_DIR}/kiro_prompt.txt for your review instructions, then follow them." > "{SESSION_DIR}/kiro.md" 2>"{SESSION_DIR}/kiro.err"
+```
+Kiro has shell access, but nah (a PreToolUse hook installed in the Claude Code session) classifies every command and blocks dangerous operations. Kiro can read files and run safe commands (git diff, grep, etc.) but destructive or out-of-boundary operations are intercepted.
+
 **If Trust level = full-access:**
 Set `{GIT_RANGE_INSTRUCTIONS}` to: "Run `git diff {BASE_SHA}..{HEAD_SHA}` to see the changes."
 ```bash
 kiro-cli chat --no-interactive --trust-all-tools "Read {SESSION_DIR}/kiro_prompt.txt for your review instructions, then follow them." > "{SESSION_DIR}/kiro.md" 2>"{SESSION_DIR}/kiro.err"
 ```
-Kiro reads its instructions from the file. Can read files and execute shell commands.
+Kiro reads its instructions from the file. Can read files and execute shell commands. No safety guard.
 
 5-minute (300000ms) timeout.
 
@@ -85,13 +92,20 @@ cat "{SESSION_DIR}/gemini_prompt.txt" "{SESSION_DIR}/diff.txt" | gemini -p "Revi
 ```
 Gemini receives the diff content directly; no `-y` flag, no tool auto-approval.
 
+**If Trust level = nah (sandboxed):**
+Same as full-access — nah guards execution at the Claude Code hook level, not the Gemini CLI level:
+```bash
+gemini -p "Review the code changes. Full instructions on stdin." -e code-review -y -o text < "{SESSION_DIR}/gemini_prompt.txt" > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
+```
+Gemini has tool access, but nah intercepts dangerous operations in the parent Claude Code session.
+
 **If Trust level = full-access:**
 Set `{GIT_RANGE_INSTRUCTIONS}` to: "Run `git diff {BASE_SHA}..{HEAD_SHA}` to see the changes."
 Pipe the prompt file via stdin with `-y` for auto-approval (avoids `$()` substitution):
 ```bash
 gemini -p "Review the code changes. Full instructions on stdin." -e code-review -y -o text < "{SESSION_DIR}/gemini_prompt.txt" > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
 ```
-Gemini reads its full prompt from stdin. Can read files and execute commands with auto-approval.
+Gemini reads its full prompt from stdin. Can read files and execute commands with auto-approval. No safety guard.
 
 5-minute (300000ms) timeout.
 

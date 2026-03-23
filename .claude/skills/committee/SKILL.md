@@ -226,11 +226,19 @@ AskUserQuestion:
       options:
         - label: "Read-only (Recommended)"
           description: "Reviewers read the precomputed diff file only. No shell access. Safe for untrusted code."
+        - label: "Sandboxed (nah)"
+          description: "Reviewers have shell access guarded by nah — context-aware safety hook that classifies commands and blocks dangerous operations. Requires nah to be installed (pip install nah)."
         - label: "Full access"
           description: "Reviewers can explore the repo autonomously (git log, grep, blame). Allows arbitrary command execution if diff contains adversarial content."
 ```
 
 Record the user's selection. Default to read-only if no answer.
+
+**If "Sandboxed (nah)" is selected:** Verify nah is installed:
+```bash
+which nah
+```
+If not found, tell the user: "nah is not installed. Install with `pip install nah && nah install`, then retry. Falling back to read-only mode." and use read-only.
 
 Note the SESSION_DIR path and trust level. You will pass both to the coordinator.
 
@@ -284,7 +292,7 @@ PR cleanup ref: <refs/pull/<n>/head — coordinator deletes this in Phase 3, if 
 Diff stat:
 <output of the diff --stat command>
 Session dir: <the SESSION_DIR path>
-Trust level: <read-only | full-access>
+Trust level: <read-only | nah | full-access>
 Claude review: background (coordinator must poll for SESSION_DIR/claude.md)
 User's original input: <the raw args passed to /committee>
 ```

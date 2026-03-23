@@ -103,6 +103,7 @@ Reviews an implementation plan for completeness, feasibility, task decomposition
 Before each run, Committee presents a trust dialog:
 
 - **Read-only** (default) — Reviewers read a precomputed diff file. No shell access. Safe for untrusted code.
+- **Sandboxed (nah)** — Reviewers have shell access guarded by [nah](https://github.com/manuelschipper/nah), a context-aware safety hook that classifies commands and blocks dangerous operations. Requires `pip install nah && nah install`.
 - **Full access** — Reviewers can explore the repo autonomously (`git log`, `grep`, `blame`). Richer reviews but exposes the host to prompt injection from diff content.
 
 ## Recommended Settings
