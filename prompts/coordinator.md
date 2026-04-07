@@ -22,7 +22,7 @@ Note: Claude is running in the background simultaneously — do not wait for it 
 
 ### Reviewer 1: Codex
 
-Dispatch via Bash tool with a **10-minute (600000ms) timeout**. Codex uses gpt-5.4 with xhigh reasoning and is slow — small commits take ~5 minutes. Pipe output to temp file:
+Dispatch via Bash tool with a **10-minute (600000ms) timeout** (use **12-minute / 720000ms for plan scope** — Codex explores auxiliary code to validate feasibility). Codex uses gpt-5.4 with xhigh reasoning and is slow — small commits take ~5 minutes. Pipe output to temp file:
 
 For branch diff:
 ```bash
@@ -142,11 +142,18 @@ If `{SESSION_DIR}/claude.md` still does not exist after the loop, record: "Claud
 
 After all reviewers complete (or fail), collect the results.
 
+**CRITICAL: Do NOT read any review files (claude.md, codex.md, kiro.md, gemini.md) yourself.** Review files can be 20-30KB (exceeding Read tool limits) and the coordinator does not need their content. The verifiers read their own files. Your job is to check which reviewers succeeded/failed, dispatch verifiers, and synthesize from verifier output.
+
+To determine success/failure, check file existence and size via Bash — do not use the Read tool on review files:
+```bash
+wc -c "{SESSION_DIR}/claude.md" "{SESSION_DIR}/codex.md" "{SESSION_DIR}/kiro.md" "{SESSION_DIR}/gemini.md" 2>&1
+```
+
 **Handling failures explicitly:** For each reviewer, check the result:
 - Non-zero exit code → failure. Record: "<Reviewer>: exited with code N"
 - Timeout (Bash tool returns timeout error) → failure. Record the actual timeout: "<Reviewer>: timed out after N minutes" (Codex: 10 min, Kiro: 5 min, Gemini: 5 min)
-- Empty output → failure. Record: "<Reviewer>: returned empty output"
-- Error message instead of review content → failure. Record: "<Reviewer>: <first line of error>"
+- Missing output file → failure. Record: "<Reviewer>: no output file produced"
+- Output file exists but ≤200 bytes → likely tool initialization issue, not a real review. Check the `.err` file for clues. Record: "<Reviewer>: output too small (N bytes), likely tool/mode issue"
 - Missing after polling → failure as recorded above
 
 **Check quorum:** If fewer than 2 reviewers succeeded, STOP:
@@ -169,6 +176,8 @@ git update-ref -d {PR_CLEANUP_REF} 2>/dev/null || true
 (Include the `git update-ref` line only if `PR cleanup ref` is present in REVIEW_CONTEXT.)
 
 **If quorum met:** Dispatch one verifier per reviewer in parallel — single message, multiple Agent tool calls. Each verifier reads its own review file directly; the coordinator never reads review content.
+
+**Error recovery:** If any verifier Agent call fails (timeout, error, etc.), note it in the synthesis but proceed with the others. If all verifiers fail, produce a partial report listing which reviewers completed and their file paths so the user can read them manually. Never let a verifier failure prevent synthesis.
 
 Read the verifier prompt template at `prompts/verifier.md` (or `~/.claude/skills/committee/prompts/verifier.md` if not found). For each reviewer that succeeded, fill in and dispatch a separate Agent call:
 - `{REVIEWER_NAME}` — "Claude", "Codex", "Kiro", or "Gemini"

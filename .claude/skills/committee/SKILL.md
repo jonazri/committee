@@ -302,6 +302,20 @@ Dispatch a single subagent via the Agent tool:
 - Prompt: The coordinator prompt with {REVIEW_CONTEXT} filled in
 - Run in foreground (you need the result to display to the user)
 
+## Handle Coordinator Failure
+
+If the coordinator agent returns an error, times out, or returns an empty/malformed report:
+
+1. **Do NOT delete the session directory.** The review files may still be useful.
+2. Check which review files exist and their sizes:
+   ```bash
+   wc -c "{SESSION_DIR}"/*.md 2>/dev/null
+   ```
+3. If review files exist, inform the user:
+   > "Coordinator failed to synthesize. Individual reviews are available at `{SESSION_DIR}/`. I can read them directly and produce a synthesis."
+4. Read the available review files yourself (use `offset` and `limit` if any exceed 10K tokens) and produce a manual synthesis following the same Critical/Important/Minor format the coordinator would have used.
+5. Clean up the session directory only after presenting results to the user.
+
 ## Evaluate and Display Result
 
 Before presenting the coordinator's report to the user, apply `superpowers:receiving-code-review` to evaluate the findings:
