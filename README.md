@@ -106,6 +106,25 @@ Before each run, Committee presents a trust dialog:
 - **Sandboxed (nah)** — Reviewers have shell access guarded by [nah](https://github.com/manuelschipper/nah), a context-aware safety hook that classifies commands and blocks dangerous operations. Requires `pip install nah && nah install`.
 - **Full access** — Reviewers can explore the repo autonomously (`git log`, `grep`, `blame`). Richer reviews but exposes the host to prompt injection from diff content.
 
+## Committee Loop
+
+Companion skill `/committee-loop` (v1.0) runs iterative review-and-refine cycles. Where `/committee` produces a single report for you to act on, `/committee-loop` spawns a detached Claude Code session in an isolated git worktree that:
+
+1. Runs a `simplify` pre-pass to catch obvious code-quality issues
+2. **Iteration 1 — fast mode:** dispatches only Claude + Kiro reviewers (skipping the slowest reviewers) for quick resolution of easy findings
+3. **Iteration 2+ — full mode:** uses `/committee` (all 4 reviewers) for thorough verification
+4. Per reviewer, dispatches a parallel verifier subagent that runs concrete bash probes to confirm each claim before any fix is applied
+5. Applies only Critical+Important findings that pass a quorum gate (≥2 reviewers OR single reviewer + passing verification probe); rejects unverifiable claims; defers minors to a sidecar
+6. Maintains a persistent `.committee-loop-decisions.md` ledger with verification commands and rationale for every decision — prevents thrashing because prior rejections can't be re-opened without new evidence
+7. Exits when zero Critical+Important findings remain, or when a fix would reverse a prior iteration (convergence detection), and copies the reviewed file back to origin with a commit
+
+Invocation:
+```
+/committee-loop Review docs/superpowers/specs/my-spec.md
+```
+
+Requires `tmux`, `git 2.31+`, `realpath -e` (GNU coreutils), `sha256sum`, and the `ralph-loop` Claude Code plugin. The loop runs unattended — monitor with `tmux attach -t <session>` or walk away.
+
 ## Recommended Settings
 
 Add these to your project's `.claude/settings.local.json` for smooth operation (avoids permission dialogs):

@@ -4,7 +4,9 @@ Multi-perspective code review agent for Claude Code.
 
 ## What This Is
 
-A Claude Code skill (`/committee`) that runs parallel code reviews from four AI reviewers (Claude, Codex, Kiro, Gemini), verifies claims, and synthesizes a structured report.
+Two Claude Code skills:
+- `/committee` — one-shot parallel code review from four AI reviewers (Claude, Codex, Kiro, Gemini), verifies claims, synthesizes a structured report.
+- `/committee-loop` (v1.0) — companion skill that spawns a detached session in an isolated worktree to iteratively review-and-refine a target file until clean. Phase-based reviewer dispatch (fast iter-1 with Claude+Kiro; full iter-2+ with all 4), simplify pre-pass, parallel verifier subagents, persistent decision ledger to prevent thrashing. Dogfooded on itself through 6 rounds of self-review.
 
 ## Prerequisites
 
@@ -32,7 +34,8 @@ All four reviewer CLIs must be installed and authenticated:
 
 ## Project Structure
 
-- `.claude/skills/committee/SKILL.md` — The skill entry point (installed here for Claude Code to discover it as `/committee`)
+- `.claude/skills/committee/SKILL.md` — The `/committee` skill entry point
+- `.claude/skills/committee-loop/SKILL.md` — The `/committee-loop` companion skill (v1.0)
 - `prompts/coordinator.md` — Coordinator subagent prompt template
 - `prompts/verifier.md` — Verifier subagent prompt template
 - `prompts/reviewers/claude.md` — Claude review prompt (embedded directly; plugin subagent types unavailable in nested subagent context)
