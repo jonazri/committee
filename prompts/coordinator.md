@@ -88,14 +88,14 @@ Write the filled prompt to `{SESSION_DIR}/gemini_prompt.txt` first, then dispatc
 **If Trust level = read-only:**
 Set `{GIT_RANGE_INSTRUCTIONS}` to: "The diff is included below." Then pipe the precomputed diff as stdin — gemini reads stdin without needing tool access:
 ```bash
-cat "{SESSION_DIR}/gemini_prompt.txt" "{SESSION_DIR}/diff.txt" | gemini -p "Review the code changes provided on stdin." -e code-review -o text > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
+cat "{SESSION_DIR}/gemini_prompt.txt" "{SESSION_DIR}/diff.txt" | gemini -m gemini-2.5-pro -p "Review the code changes provided on stdin." -e code-review -o text > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
 ```
 Gemini receives the diff content directly; no `-y` flag, no tool auto-approval.
 
 **If Trust level = nah (sandboxed):**
 Same as full-access — nah guards execution at the Claude Code hook level, not the Gemini CLI level:
 ```bash
-gemini -p "Review the code changes. Full instructions on stdin." -e code-review -y -o text < "{SESSION_DIR}/gemini_prompt.txt" > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
+gemini -m gemini-2.5-pro -p "Review the code changes. Full instructions on stdin." -e code-review -y -o text < "{SESSION_DIR}/gemini_prompt.txt" > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
 ```
 Gemini has tool access, but nah intercepts dangerous operations in the parent Claude Code session.
 
@@ -103,7 +103,7 @@ Gemini has tool access, but nah intercepts dangerous operations in the parent Cl
 Set `{GIT_RANGE_INSTRUCTIONS}` to: "Run `git diff {BASE_SHA}..{HEAD_SHA}` to see the changes."
 Pipe the prompt file via stdin with `-y` for auto-approval (avoids `$()` substitution):
 ```bash
-gemini -p "Review the code changes. Full instructions on stdin." -e code-review -y -o text < "{SESSION_DIR}/gemini_prompt.txt" > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
+gemini -m gemini-2.5-pro -p "Review the code changes. Full instructions on stdin." -e code-review -y -o text < "{SESSION_DIR}/gemini_prompt.txt" > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
 ```
 Gemini reads its full prompt from stdin. Can read files and execute commands with auto-approval. No safety guard.
 
