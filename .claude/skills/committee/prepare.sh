@@ -405,6 +405,45 @@ case "$SCOPE" in
   auto)         handle_auto ;;
 esac
 
+# ---- Static-analyzer pre-pass ----
+# Derive the list of files touched by this review's scope, then hand them to
+# static-prepass.sh which runs shellcheck / ruff / yamllint / JSON syntax
+# checks as applicable and writes $SESSION_DIR/static.txt. Plan scope is
+# skipped (markdown plan — no code analyzer applies). Static findings are
+# advisory context for reviewers, not a gate — failures here never block.
+STATIC_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+STATIC_FILES=()
+case "$SCOPE" in
+  files)
+    # paths.txt was copied into SESSION_DIR by handle_files; read line-by-line.
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -z "$line" ] && continue
+      STATIC_FILES+=( "$line" )
+    done < "$SESSION_DIR/paths.txt"
+    ;;
+  branch_diff|commit|sha_range|pr)
+    # Derive changed-file list from the resolved SHA range.
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -z "$line" ] && continue
+      STATIC_FILES+=( "$line" )
+    done < <(git diff --name-only "$BASE_SHA..$HEAD_SHA" 2>/dev/null || true)
+    ;;
+  uncommitted)
+    # Include both tracked-changed and untracked-new files. -z/null-delimited
+    # to handle newlines in filenames.
+    while IFS= read -r -d '' f; do
+      STATIC_FILES+=( "$f" )
+    done < <({ git diff --name-only -z HEAD; git ls-files --others --exclude-standard -z; } 2>/dev/null || true)
+    ;;
+  plan) ;;  # markdown plan — no analyzer
+esac
+
+if [ -x "$STATIC_SCRIPT_DIR/static-prepass.sh" ] && [ "${#STATIC_FILES[@]}" -gt 0 ]; then
+  # Never let a crash in the pre-pass propagate — static analysis is advisory.
+  bash "$STATIC_SCRIPT_DIR/static-prepass.sh" "$SESSION_DIR" "${STATIC_FILES[@]}" \
+    2>>"$SESSION_DIR/diff.err" || true
+fi
+
 # ---- Emit manifest ----
 
 MANIFEST="$SESSION_DIR/manifest.txt"

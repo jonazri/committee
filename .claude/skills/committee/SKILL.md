@@ -125,6 +125,8 @@ Dispatch via `Agent` with `subagent_type: "superpowers:code-reviewer"` and `run_
 
 Always append: `"Write your complete review to <SESSION_DIR>/claude.md using the Write tool before returning."`
 
+Also append (conditionally): if `<SESSION_DIR>/static.txt` exists and is non-empty, add: `"Also read <SESSION_DIR>/static.txt — it contains advisory static-analysis findings (shellcheck / ruff / yamllint / JSON syntax) from the skill's pre-pass. Verify each finding applies to the actual changed code before flagging; some may be false positives or out of scope."`
+
 **Per-scope prompt extras:**
 
 | Scope | WHAT_WAS_IMPLEMENTED | Extra directive to append |
@@ -167,6 +169,9 @@ USER_INPUT_<SENTINEL>
 Dispatch via `Agent` (foreground):
 - **Description:** `Committee code review`
 - **Prompt:** coordinator template with `{REVIEW_CONTEXT}` filled in
+- **Model:** `sonnet`
+
+The coordinator's work is pattern-shaped (collect verifier outputs, synthesize into Critical/Important/Minor format) — Sonnet handles this faster than Opus with equivalent quality. Fall back to the default model only if Sonnet is unavailable in the caller's plan.
 
 ## Failure modes
 

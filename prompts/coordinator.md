@@ -22,37 +22,39 @@ Note: Claude is running in the background simultaneously — do not wait for it 
 
 ### Reviewer 1: Codex
 
-Dispatch via Bash tool with a **10-minute (600000ms) timeout** (use **12-minute / 720000ms for plan scope** — Codex explores auxiliary code to validate feasibility). Codex uses gpt-5.4 with xhigh reasoning and is slow — small commits take ~5 minutes. Pipe output to temp file:
+Dispatch via Bash tool with an **8-minute (480000ms) timeout** (use **10-minute / 600000ms for plan scope** — Codex explores auxiliary code to validate feasibility). Every codex invocation below passes `-c model_reasoning_effort=high` to override the user's global `xhigh` default — high still produces strong findings and typically completes in ~3–5 minutes instead of 5–10. Pipe output to temp file:
 
 For branch diff:
 ```bash
-codex review --base {BASE_BRANCH} > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"
+codex review -c model_reasoning_effort=high --base {BASE_BRANCH} > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"
 ```
 
 For single commit:
 ```bash
-codex review --commit {COMMIT_SHA} > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"
+codex review -c model_reasoning_effort=high --commit {COMMIT_SHA} > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"
 ```
 Note: `{COMMIT_SHA}` = the `Commit SHA` field from REVIEW_CONTEXT (same as Head SHA for commit scope).
 
 For uncommitted changes:
 ```bash
-codex review --uncommitted > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"
+codex review -c model_reasoning_effort=high --uncommitted > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"
 ```
 
 For sha_range or pr: `codex review` has no SHA range flag, but `codex exec` can run git commands autonomously. Write the review prompt to `{SESSION_DIR}/codex_prompt.txt` using the Write tool, then pass via stdin (avoids `$()` substitution and inline multiline prompts):
 ```bash
-codex exec --ephemeral -o "{SESSION_DIR}/codex.md" - < "{SESSION_DIR}/codex_prompt.txt" 2>"{SESSION_DIR}/codex.err"
+codex exec -c model_reasoning_effort=high --ephemeral -o "{SESSION_DIR}/codex.md" - < "{SESSION_DIR}/codex_prompt.txt" 2>"{SESSION_DIR}/codex.err"
 ```
 The prompt file should contain: "Review the git changes between commit {BASE_SHA} and {HEAD_SHA}. Run `git diff --stat {BASE_SHA}..{HEAD_SHA}` for a summary, then `git diff {BASE_SHA}..{HEAD_SHA}` for the full diff. Format with Critical/Important/Minor sections with file:line references."
-Note: `codex exec` uses gpt-5.4/xhigh — allow the full 10-minute timeout.
 
 ### Reviewer 2: Kiro
 
 Read the prompt template at `prompts/reviewers/kiro.md` (or `~/.claude/skills/committee/prompts/reviewers/kiro.md` if not found). Fill in the placeholders:
 - `{SCOPE_DESCRIPTION}` — describe the changes
 - `{GIT_RANGE_INSTRUCTIONS}` — depends on trust level (see below)
-- `{ADDITIONAL_CONTEXT}` — if the user's original input references a spec or plan file, add "Also read <path> to understand the design requirements." Otherwise leave blank.
+- `{ADDITIONAL_CONTEXT}` — build up from these triggers (combine with newlines, leave blank if none fire):
+  - If the user's original input references a spec or plan file, add: `Also read <path> to understand the design requirements.`
+  - If `{SESSION_DIR}/static.txt` exists and is non-empty (check with `[ -s {SESSION_DIR}/static.txt ]`), add: `Also read {SESSION_DIR}/static.txt — it contains advisory static-analysis findings (shellcheck / ruff / yamllint / JSON syntax). Verify each finding applies to the actual changed code before flagging; some may not be relevant to this diff.`
+- `{FOCUS_AREAS}` — see "Scope-Conditional Focus Areas" below.
 
 Write the filled prompt to `{SESSION_DIR}/kiro_prompt.txt` using the Write tool. Then pass a short static instruction pointing Kiro to the file (avoids `$()` command substitution that triggers security alerts):
 
@@ -81,7 +83,7 @@ Kiro reads its instructions from the file. Can read files and execute shell comm
 
 ### Reviewer 3: Gemini
 
-Read the prompt template at `prompts/reviewers/gemini.md` (or `~/.claude/skills/committee/prompts/reviewers/gemini.md` if not found). Fill in the placeholders (same as Kiro).
+Read the prompt template at `prompts/reviewers/gemini.md` (or `~/.claude/skills/committee/prompts/reviewers/gemini.md` if not found). Fill in the placeholders (same as Kiro, including `{FOCUS_AREAS}`).
 
 Write the filled prompt to `{SESSION_DIR}/gemini_prompt.txt` first, then dispatch.
 
@@ -109,9 +111,45 @@ Gemini reads its full prompt from stdin. Can read files and execute commands wit
 
 5-minute (300000ms) timeout.
 
+### Scope-Conditional Focus Areas
+
+Fill `{FOCUS_AREAS}` in the Kiro and Gemini prompt templates based on `Scope type` from `{REVIEW_CONTEXT}`. Use the verbatim text below (do not paraphrase — reviewers key on specific terms):
+
+- **branch_diff / commit / uncommitted / sha_range / pr:**
+  ```
+  - Correctness: logic bugs, off-by-one, unhandled edge cases, race conditions
+  - Shell safety: quoting, injection, TOCTOU, temp-file races (when reviewing bash)
+  - API contract consistency: match between documentation/comments and actual behavior
+  - Error handling: unchecked exits, swallowed errors, missing failure paths
+  - Security: privilege escalation, data leakage, unsafe file operations
+  - Test coverage: cases the changes could break that aren't exercised
+  ```
+
+- **files:**
+  ```
+  - Code quality: clarity, maintainability, duplication
+  - Correctness: logic bugs, unhandled edge cases
+  - Security: injection risks, unsafe patterns
+  - API contracts: public-surface inconsistencies between this file and its callers
+  - Design: coupling, layering, abstraction level
+  ```
+
+- **plan:**
+  ```
+  - Completeness: every implementation step is described, no "TODO: figure out X" placeholders
+  - Feasibility: each step is achievable with the named tools/APIs
+  - Task decomposition: work is broken into pieces an implementing agent can finish in a single session
+  - Architectural soundness: the proposed design survives the identified constraints and failure modes
+  - Missing edge cases: error paths, concurrent access, partial failure
+  - YAGNI violations: over-engineered scaffolding, unused abstraction layers
+  - Actionability: an implementing agent could follow this plan without making judgment calls the author didn't anticipate
+  ```
+
+Leave `{FOCUS_AREAS}` filled with the matching block. Do NOT strip the bullet syntax or prefix wording — reviewers use the structure to organize findings.
+
 ### Mapping Scope to CLI Flags
 
-The skill has already resolved the review scope and provided it in `{REVIEW_CONTEXT}`. Do NOT re-resolve scope. Map the provided context to each tool's CLI flags:
+The skill has already resolved the review scope and provided it in `{REVIEW_CONTEXT}`. Do NOT re-resolve scope. Map the provided context to each tool's CLI flags. **All `codex` invocations below include `-c model_reasoning_effort=high` — see Reviewer 1 section for the full command form. The shorthand flags shown here omit `-c` for readability, but you must pass it.**
 
 - **Scope type: branch_diff** → `codex review --base {BASE_BRANCH}`. For Kiro/Gemini, use `git diff {BASE_BRANCH}...HEAD`.
 - **Scope type: commit** → `codex review --commit {COMMIT_SHA}` (use `Commit SHA` from REVIEW_CONTEXT). For Kiro/Gemini, use `git show {COMMIT_SHA}`.
@@ -177,9 +215,11 @@ git update-ref -d {PR_CLEANUP_REF} 2>/dev/null || true
 
 **If quorum met:** Dispatch one verifier per reviewer in parallel — single message, multiple Agent tool calls. Each verifier reads its own review file directly; the coordinator never reads review content.
 
+**Model selection:** Each verifier Agent call MUST pass `model: "sonnet"`. Verifiers do narrow claim-probing work (read a claim, run a verification command, tag Confirmed/Refuted/Unverifiable) — Opus is overkill for this and ~2–3× slower. Sonnet produces equivalent tags at faster wall-time and lower cost. If a verifier task errors with a model-not-allowed message, fall back to the default model.
+
 **Error recovery:** If any verifier Agent call fails (timeout, error, etc.), note it in the synthesis but proceed with the others. If all verifiers fail, produce a partial report listing which reviewers completed and their file paths so the user can read them manually. Never let a verifier failure prevent synthesis.
 
-Read the verifier prompt template at `prompts/verifier.md` (or `~/.claude/skills/committee/prompts/verifier.md` if not found). For each reviewer that succeeded, fill in and dispatch a separate Agent call:
+Read the verifier prompt template at `prompts/verifier.md` (or `~/.claude/skills/committee/prompts/verifier.md` if not found). For each reviewer that succeeded, fill in and dispatch a separate Agent call (remember `model: "sonnet"`):
 - `{REVIEWER_NAME}` — "Claude", "Codex", "Kiro", or "Gemini"
 - `{REVIEW_FILE_PATH}` — path to the review file (e.g. `.committee/session-XXXXXX/claude.md`)
 - `{SESSION_DIR}` — the session directory path (contains diff.txt, diff_stat.txt)
