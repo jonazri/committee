@@ -4,7 +4,7 @@
 # Emits a manifest (KEY=value, %q-escaped) to stdout AND to $SESSION_DIR/manifest.txt.
 #
 # Usage:
-#   prepare.sh --scope=branch-diff  --base=<branch>
+#   prepare.sh --scope=branch_diff  --base=<branch>
 #   prepare.sh --scope=commit       --commit=<sha>
 #   prepare.sh --scope=sha_range    --range=<sha>..<sha>        # or <sha>...<sha>
 #   prepare.sh --scope=pr           --pr=<n>  [--pr-url=<URL>]
@@ -90,9 +90,10 @@ parse_range() {
 if [ "$SCOPE" = "vague" ]; then
   [ -f "$KEYWORDS_FILE" ] || { echo "Error: --keywords-file not found: $KEYWORDS_FILE" >&2; exit 1; }
   # $(cat -- FILE) captures file bytes as a literal arg; the shell does NOT
-  # re-parse them for $() or backticks — safe regardless of keyword content.
+  # re-parse them for $() or backticks. -F treats the keyword as a fixed
+  # string so regex metacharacters (e.g. ".*") match literally.
   echo "=== Commits matching keyword ==="
-  git log --oneline --all --grep="$(cat -- "$KEYWORDS_FILE")" | head -10 || true
+  git log --oneline --all -F --grep="$(cat -- "$KEYWORDS_FILE")" | head -10 || true
   echo "=== Recent commits with files ==="
   git log --oneline -10 --name-only || true
   exit 0
@@ -101,8 +102,8 @@ fi
 # ---- Validate flag combinations per scope ----
 
 case "$SCOPE" in
-  branch-diff)
-    [ -n "$BASE" ] || { echo "Error: --base required for branch-diff" >&2; exit 1; }
+  branch_diff)
+    [ -n "$BASE" ] || { echo "Error: --base required for branch_diff" >&2; exit 1; }
     validate_branch "$BASE"
     ;;
   commit)
@@ -133,30 +134,62 @@ esac
 
 # ---- Create session dir ----
 
+# Cleanup trap: fires on ANY shell termination (normal exit, explicit exit N,
+# set -e, SIGINT, SIGTERM, SIGHUP). EXIT coverage is required because the
+# script uses `|| { ...; exit 1; }` validation patterns that bypass the ERR
+# trap — leaking SESSION_DIR and (PR scope) fetched refs if we only relied on
+# ERR. At the end of the happy path we `trap - EXIT` before `cat "$MANIFEST"`
+# to suppress cleanup on success.
+#
+# State signals (all default-empty):
+#   UNCOMMITTED_UNTRACKED_NUL — non-empty path => outstanding `git add -N` to
+#                               roll back via `xargs -0 git reset --`.
+#                               Cleared on the happy path after reset runs.
+#   PR_BASE_FETCHED          — "1" => `refs/pr-committee/$PR-base` was
+#                               successfully fetched and must be torn down
+#                               on any failure path. Not cleared on the happy
+#                               path — the `trap - EXIT` before manifest cat
+#                               makes the flag moot.
+#
+# NOTE on refs/pull/$PR/head: git-fetch always REPLACES the ref's value if it
+# exists, so we don't track or delete it here. Users may have pre-existing
+# refs/pull/* from unrelated workflows; touching them would violate least-
+# surprise. The pr-committee/* namespace is this skill's own.
+UNCOMMITTED_UNTRACKED_NUL=""
+PR_BASE_FETCHED=""
+
+cleanup_on_exit() {
+  local rc=$?
+  # Roll back intent-to-add registration before removing SESSION_DIR (the
+  # untracked.nul file lives inside it).
+  if [ -n "$UNCOMMITTED_UNTRACKED_NUL" ] && [ -f "$UNCOMMITTED_UNTRACKED_NUL" ]; then
+    xargs -0 -- git reset -- < "$UNCOMMITTED_UNTRACKED_NUL" >/dev/null 2>&1 || true
+  fi
+  # Only clean dirs we know we created under .committee/. Never rm -rf a raw
+  # $SESSION_DIR whose prefix we haven't verified.
+  case "${SESSION_DIR:-}" in
+    "$PROJECT_ROOT"/.committee/session-*)
+      rm -rf -- "$SESSION_DIR" 2>/dev/null || true
+      ;;
+  esac
+  if [ "$PR_BASE_FETCHED" = 1 ]; then
+    git update-ref -d "refs/pr-committee/$PR-base" 2>/dev/null || true
+  fi
+  exit "$rc"
+}
+
 mkdir -p "$PROJECT_ROOT/.committee"
 SESSION_DIR=$(mktemp -d "$PROJECT_ROOT/.committee/session-XXXXXX")
+# Install trap IMMEDIATELY after mktemp. The case prefix-guard inside
+# cleanup_on_exit no-ops on an empty SESSION_DIR, so this is safe even if the
+# sanity check below fires.
+trap cleanup_on_exit EXIT
 [ -n "$SESSION_DIR" ] && [ -d "$SESSION_DIR" ] \
   || { echo "Error: failed to create session directory" >&2; exit 1; }
 
 # Initialize diff.err — all later diff operations APPEND via `2>>`, never
 # overwrite, so stderr from every step is preserved together.
 : > "$SESSION_DIR/diff.err"
-
-# Cleanup trap: if anything between here and the final manifest emit fails,
-# remove the session dir we just created so orphans don't accumulate. Cleared
-# at the end once manifest is written.
-cleanup_on_error() {
-  local rc=$?
-  # Only clean dirs we know we created under .committee/. Never rm -rf a raw
-  # $SESSION_DIR whose prefix we haven't verified.
-  case "$SESSION_DIR" in
-    "$PROJECT_ROOT"/.committee/session-*)
-      rm -rf -- "$SESSION_DIR" 2>/dev/null || true
-      ;;
-  esac
-  exit "$rc"
-}
-trap cleanup_on_error ERR INT TERM HUP
 
 # ---- Scope handlers: write diff.txt/diff_stat.txt, set BASE_SHA/HEAD_SHA/SCOPE_DESC ----
 
@@ -166,11 +199,7 @@ COMMIT_SHA=""
 BASE_BRANCH=""
 HEAD_BRANCH=""
 SCOPE_DESC=""
-
-# Rebind SCOPE if auto-detect picks a concrete sub-scope below. This preserves
-# the original SCOPE value in the manifest as "auto-<sub>" so the model can
-# distinguish user-supplied from auto-detected scope if it matters.
-ORIGINAL_SCOPE="$SCOPE"
+RANGE_NORMALIZED=""
 
 handle_branch_diff() {
   local base="$1"
@@ -201,7 +230,9 @@ handle_sha_range() {
   git diff        "$BASE_SHA..$HEAD_SHA" > "$SESSION_DIR/diff.txt"      2>>"$SESSION_DIR/diff.err"
   git diff --stat "$BASE_SHA..$HEAD_SHA" > "$SESSION_DIR/diff_stat.txt" 2>>"$SESSION_DIR/diff.err"
   if [ "$RANGE_WAS_THREE_DOT" = 1 ]; then
-    # Stderr → model relays to user before dispatching.
+    # Emit both the stderr warning AND a manifest flag. SKILL.md's manifest-
+    # parse step is the documented contract; stderr is supplementary.
+    RANGE_NORMALIZED="1"
     printf 'Note: Three-dot range was normalized to two-dot. Review covers changes between the two commits, not symmetric-diff against merge-base.\n' >&2
   fi
 }
@@ -217,8 +248,11 @@ handle_pr() {
     # to avoid accepting arbitrary URLs; strips optional trailing .git.
     if [[ "$PR_URL" =~ github\.com[:/]([^/]+/[^/]+)/pull/[0-9]+ ]]; then
       local owner_repo="${BASH_REMATCH[1]%.git}"
-      # Further validation: owner/repo components must match github's allowed chars.
-      [[ "$owner_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+      # GitHub owner/repo rules: no leading dot/hyphen, no consecutive dots.
+      # The outer regex forbids leading '.' and '-'; the `!= *..*` check
+      # rejects consecutive dots. Shell metacharacters are already excluded.
+      [[ "$owner_repo" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] \
+        && [[ "$owner_repo" != *..* ]] \
         || { echo "Error: owner/repo has disallowed chars: $owner_repo" >&2; exit 1; }
       repo_flag="-R $owner_repo"
       remote_ref="https://github.com/$owner_repo.git"
@@ -244,6 +278,11 @@ handle_pr() {
     || { echo "Error: could not fetch PR head ref from $remote_ref" >&2; exit 1; }
   git fetch "$remote_ref" "refs/heads/$base_ref:refs/pr-committee/$PR-base" 2>>"$SESSION_DIR/diff.err" \
     || { echo "Error: could not fetch base branch '$base_ref' from $remote_ref" >&2; exit 1; }
+  # pr-committee/$PR-base ref now exists — signal cleanup_on_exit to tear it
+  # down on failure. refs/pull/$PR/head is intentionally not tracked (see
+  # note on cleanup_on_exit). If fetch #2 above had failed, this flag would
+  # stay empty and cleanup would correctly no-op on pr-committee.
+  PR_BASE_FETCHED=1
 
   BASE_SHA=$(git merge-base "refs/pr-committee/$PR-base" "refs/pull/$PR/head")
   HEAD_SHA=$(git rev-parse "refs/pull/$PR/head")
@@ -259,15 +298,24 @@ handle_files() {
   cp -- "$PATHS_FILE" "$SESSION_DIR/paths.txt"
   : > "$SESSION_DIR/diff.txt"
   : > "$SESSION_DIR/diff_stat.txt"
-  local count=0
+  local count=0 resolved
   # POSIX-compatible read loop — no mapfile dependency.
+  # realpath + prefix check contains paths to $PROJECT_ROOT so absolute paths
+  # like /etc/passwd or symlinks escaping the repo can't be shipped to external
+  # reviewer LLMs. Relative paths resolve against CWD and are then checked.
   while IFS= read -r f || [ -n "$f" ]; do
     [ -z "$f" ] && continue
     [ -f "$f" ] || { echo "Error: file not found: $f" >&2; exit 1; }
+    resolved=$(realpath -- "$f") \
+      || { echo "Error: could not resolve path: $f" >&2; exit 1; }
+    case "$resolved" in
+      "$PROJECT_ROOT"/*) ;;
+      *) echo "Error: path escapes project root: $f -> $resolved" >&2; exit 1 ;;
+    esac
     printf '=== FILE: %s ===\n' "$f" >> "$SESSION_DIR/diff.txt"      2>>"$SESSION_DIR/diff.err"
-    cat -- "$f"                      >> "$SESSION_DIR/diff.txt"      2>>"$SESSION_DIR/diff.err"
+    cat -- "$resolved"               >> "$SESSION_DIR/diff.txt"      2>>"$SESSION_DIR/diff.err"
     printf '\n'                      >> "$SESSION_DIR/diff.txt"      2>>"$SESSION_DIR/diff.err"
-    wc -l -- "$f"                    >> "$SESSION_DIR/diff_stat.txt" 2>>"$SESSION_DIR/diff.err"
+    wc -l -- "$resolved"             >> "$SESSION_DIR/diff_stat.txt" 2>>"$SESSION_DIR/diff.err"
     count=$((count + 1))
   done < "$SESSION_DIR/paths.txt"
   SCOPE_DESC="$count file(s)"
@@ -276,6 +324,13 @@ handle_files() {
 handle_plan() {
   cp -- "$PLAN" "$SESSION_DIR/diff.txt"                            2>>"$SESSION_DIR/diff.err"
   wc -l -- "$PLAN"          > "$SESSION_DIR/diff_stat.txt"         2>>"$SESSION_DIR/diff.err"
+  if [ -n "$SPEC" ]; then
+    # Copy spec into the session dir so the review is self-contained even if
+    # the user later moves/deletes the source. Redirect SPEC so the manifest
+    # points at the session-local copy.
+    cp -- "$SPEC" "$SESSION_DIR/spec.txt"                          2>>"$SESSION_DIR/diff.err"
+    SPEC="$SESSION_DIR/spec.txt"
+  fi
   SCOPE_DESC="plan $PLAN"
 }
 
@@ -286,15 +341,18 @@ handle_uncommitted() {
   # "others"), and xargs -0 with empty input runs `git reset --` with no paths,
   # which unstages the user's ENTIRE index.
   git ls-files --others --exclude-standard -z > "$SESSION_DIR/untracked.nul" 2>>"$SESSION_DIR/diff.err"
-  local has_untracked=0
   if [ -s "$SESSION_DIR/untracked.nul" ]; then
-    has_untracked=1
+    # Signal cleanup_on_exit that there's outstanding intent-to-add state to
+    # roll back. Set BEFORE `git add -N` so partial adds are also rolled back.
+    UNCOMMITTED_UNTRACKED_NUL="$SESSION_DIR/untracked.nul"
     xargs -0 -- git add -N -- < "$SESSION_DIR/untracked.nul" 2>>"$SESSION_DIR/diff.err"
   fi
   git diff        HEAD > "$SESSION_DIR/diff.txt"      2>>"$SESSION_DIR/diff.err"
   git diff --stat HEAD > "$SESSION_DIR/diff_stat.txt" 2>>"$SESSION_DIR/diff.err"
-  if [ "$has_untracked" = 1 ]; then
-    xargs -0 -- git reset -- < "$SESSION_DIR/untracked.nul" >/dev/null 2>>"$SESSION_DIR/diff.err"
+  if [ -n "$UNCOMMITTED_UNTRACKED_NUL" ]; then
+    xargs -0 -- git reset -- < "$UNCOMMITTED_UNTRACKED_NUL" >/dev/null 2>>"$SESSION_DIR/diff.err"
+    # Happy path: clear the signal so cleanup_on_exit no-ops.
+    UNCOMMITTED_UNTRACKED_NUL=""
   fi
   SCOPE_DESC="uncommitted changes"
 }
@@ -329,7 +387,7 @@ handle_auto() {
     head=$(git rev-parse HEAD)
     handle_commit "$head"
   else
-    SCOPE="branch-diff"
+    SCOPE="branch_diff"
     handle_branch_diff "$default_branch"
   fi
 }
@@ -337,7 +395,7 @@ handle_auto() {
 # ---- Dispatch to the scope handler ----
 
 case "$SCOPE" in
-  branch-diff)  handle_branch_diff "$BASE" ;;
+  branch_diff)  handle_branch_diff "$BASE" ;;
   commit)       handle_commit "$COMMIT" ;;
   sha_range)    handle_sha_range ;;
   pr)           handle_pr ;;
@@ -350,10 +408,13 @@ esac
 # ---- Emit manifest ----
 
 MANIFEST="$SESSION_DIR/manifest.txt"
+# Invariant: EVERY value in this block must be emitted via `printf '...%q...\n'`
+# so the manifest round-trips through bash without re-parsing user content.
+# Adding a new field without %q will break SKILL.md's manifest-parse step.
 {
   printf 'SESSION_DIR=%q\n'        "$SESSION_DIR"
+  printf 'PROJECT_ROOT=%q\n'       "$PROJECT_ROOT"
   printf 'SCOPE_TYPE=%q\n'          "$SCOPE"
-  printf 'ORIGINAL_SCOPE=%q\n'      "$ORIGINAL_SCOPE"
   printf 'SCOPE_DESCRIPTION=%q\n'   "$SCOPE_DESC"
   printf 'BASE_SHA=%q\n'            "${BASE_SHA:-none}"
   printf 'HEAD_SHA=%q\n'            "${HEAD_SHA:-none}"
@@ -361,9 +422,14 @@ MANIFEST="$SESSION_DIR/manifest.txt"
   [ -n "$BASE_BRANCH" ] && printf 'BASE_BRANCH=%q\n'   "$BASE_BRANCH"
   [ -n "$HEAD_BRANCH" ] && printf 'HEAD_BRANCH=%q\n'   "$HEAD_BRANCH"
   [ -n "$PR" ]          && printf 'PR_NUMBER=%q\n'     "$PR"
-  [ -n "$PR" ]          && printf 'PR_CLEANUP_REFS=%q\n' "refs/pull/$PR/head refs/pr-committee/$PR-base"
+  [ -n "$PR" ]          && printf 'PR_BASE_REF=%q\n'   "refs/pr-committee/$PR-base"
   [ -n "$SPEC" ]        && printf 'SPEC_PATH=%q\n'     "$SPEC"
+  [ -n "$RANGE_NORMALIZED" ] && printf 'RANGE_NORMALIZED=%q\n' "$RANGE_NORMALIZED"
 } > "$MANIFEST"
 
-trap - ERR INT TERM HUP
+# Manifest was written successfully; disarm cleanup_on_exit so the session
+# survives for the coordinator + reviewers. Order is load-bearing — disarm
+# BEFORE `cat` so a SIGPIPE from a caller reading only the first line
+# doesn't trigger cleanup of the now-durable session.
+trap - EXIT
 cat "$MANIFEST"
