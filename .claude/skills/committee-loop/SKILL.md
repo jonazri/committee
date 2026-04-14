@@ -5,7 +5,7 @@ description: Use when iteratively reviewing and refining a spec, plan, design do
 
 # Committee Loop
 
-Spawn a detached Claude Code session in an isolated worktree that runs `/ralph-loop:ralph-loop` with `/committee` as the review task. The inner agent vets each finding against a quorum + severity + ledger gate and stops when the review is clean OR when it would reverse its own prior fixes. The invoking session coordinates via a background watcher whose exit notification is the "loop done" callback.
+Spawn a detached Claude Code session in an isolated worktree that runs `/ralph-loop:ralph-loop` with `/committee` as the review task. The inner agent vets each finding against a quorum + severity + ledger gate and stops when the review is clean OR when it would reverse its own prior fixes. The invoking session coordinates via **two** background shells: a 4.5-minute one-shot health check that confirms the loop is running correctly, and a long-lived watcher whose exit notification is the "loop done" callback.
 
 **Announce at start:** "I'm using the committee-loop skill to spawn a detached review loop in a worktree."
 
@@ -22,7 +22,8 @@ Do NOT use when: the target needs human judgment on each finding (use `/committe
 <red_flags>
 - About to run `/ralph-loop:ralph-loop` in the current session → spawn detached via `spawn.sh` instead
 - About to edit any bash inline in SKILL.md or reproduce spawn logic by hand → call `spawn.sh`
-- About to synchronously block on the tmux session or the watcher → the watcher runs in background; the harness delivers the completion notification
+- About to synchronously block on the tmux session, watcher, or health check → all run in background; the harness delivers each exit as a notification
+- About to tell the user "fire-and-forget" or exit without installing BOTH the watcher and the health check → this skill actively monitors; both shells must be launched before reporting
 - The argument contains no concrete file path → ask the user which file to review before spawning
 </red_flags>
 
@@ -66,19 +67,19 @@ done < <(find "${SEARCH_ROOTS[@]}" -type d -name committee-loop 2>/dev/null)
 bash "$SKILL_DIR/spawn.sh" <path1> [<path2> ...]
 ```
 
-`spawn.sh` handles preflight (tool checks, skill checks, realpath/git version probes, git identity), creates a sibling-dir worktree + committee-loop branch, seeds the worktree with the current origin bytes (including uncommitted edits), generates `.committee-loop-post.sh` / `.committee-loop-watcher.sh` / `.committee-loop-instructions.md` / `.committee-loop-prompt.txt` in the worktree, spawns the detached `tmux` session running `claude --dangerously-skip-permissions --effort high`, pastes the ralph-loop prompt, and emits a manifest on stdout.
+`spawn.sh` handles preflight (tool checks, skill checks, realpath/git version probes, git identity), creates a sibling-dir worktree + committee-loop branch, seeds the worktree with the current origin bytes (including uncommitted edits), generates `.committee-loop-post.sh` / `.committee-loop-watcher.sh` / `.committee-loop-health-check.sh` / `.committee-loop-instructions.md` / `.committee-loop-prompt.txt` in the worktree, spawns the detached `tmux` session running `claude --dangerously-skip-permissions --effort high`, pastes the ralph-loop prompt, and emits a manifest on stdout.
 
 On any failure between worktree creation and the tmux spawn, `spawn.sh`'s trap unwinds the worktree + branch so nothing leaks.
 
 **Do NOT use the `using-git-worktrees` skill** — it's interactive and runs test baselines we don't need here.
 
 <manifest_format>
-The manifest is a newline-separated, %q-escaped list of `KEY=VALUE` pairs. Parse by reading the last `head` lines of stdout (or the file `$WORKTREE_PATH/.committee-loop-manifest.txt`) and extracting these keys: `SESSION`, `WORKTREE_PATH`, `BRANCH`, `ORIGIN_PATH`, `ORIGIN_REF`, `ORIGIN_GIT_DIR`, `WATCHER_SCRIPT`, `TARGET_FILES_JOINED`.
+The manifest is a newline-separated, %q-escaped list of `KEY=VALUE` pairs. Parse by reading the last `head` lines of stdout (or the file `$WORKTREE_PATH/.committee-loop-manifest.txt`) and extracting these keys: `SESSION`, `WORKTREE_PATH`, `BRANCH`, `ORIGIN_PATH`, `ORIGIN_REF`, `ORIGIN_GIT_DIR`, `WATCHER_SCRIPT`, `HEALTH_CHECK_SCRIPT`, `TARGET_FILES_JOINED`.
 </manifest_format>
 
-### 2. Install the status watcher
+### 2. Install the status watcher AND the 4.5m health check
 
-Invoke the watcher via a SEPARATE Bash tool call with `run_in_background: true`. The watcher path is in the manifest under `WATCHER_SCRIPT`:
+Launch BOTH in the same response as two parallel Bash tool calls, each with `run_in_background: true`. The watcher delivers the terminal outcome; the health check delivers a one-shot "still running?" signal at T+4.5m. Both paths are in the manifest (`WATCHER_SCRIPT`, `HEALTH_CHECK_SCRIPT`):
 
 ```
 Bash({
@@ -86,11 +87,24 @@ Bash({
   description: "Committee-loop status watcher",
   run_in_background: true
 })
+Bash({
+  command: "bash \"<HEALTH_CHECK_SCRIPT>\"",
+  description: "Committee-loop 4.5m health check",
+  run_in_background: true
+})
 ```
 
-The call returns a shell ID — save it and include in the user report so the user can kill the watcher if they cancel manually. Do NOT synchronously block on the shell; the whole point is the invoker is free to continue work until the harness delivers the completion notification.
+Each call returns a shell ID — save both and include in the user report so the user can kill them if they cancel manually. Do NOT synchronously block on either shell; the harness delivers each exit as a notification.
 
-When the watcher exits later, its stdout will be one of:
+**Health check outcomes (fires at T+4.5m, single notification):**
+
+<health_check_outcomes>
+- `HEALTHY` followed by `--- tmux pane (last 40 lines) ---` and a pane dump — loop is still running at 4.5m. Summarize the pane for the user (what iteration, what the agent is currently doing) so they know progress is real.
+- `FINISHED_EARLY:DONE` / `FINISHED_EARLY:BLOCKED` / `FINISHED_EARLY:EXHAUSTED` — loop terminated before 4.5m. The watcher will also fire (or already has); the health check just confirms no stall.
+- `TMUX_DIED_EARLY` — session is gone at 4.5m with no sentinel. Something went wrong — tell the user and suggest inspecting the worktree (which is preserved). Do NOT tear the watcher down; let it deliver `TMUX_DIED` separately so the user has both signals.
+</health_check_outcomes>
+
+**Watcher outcomes (fires whenever the loop reaches a terminal state, typically much later):**
 
 <watcher_outcomes>
 - `DONE:<sha>` — loop finished clean; commit `<sha>` on origin's branch at spawn time (`ORIGIN_REF` from the manifest; post.sh refuses to copy back if that branch moved).
@@ -101,7 +115,7 @@ When the watcher exits later, its stdout will be one of:
 - `TIMEOUT` — 24h elapsed without a terminal state (leaked watcher self-limiting).
 </watcher_outcomes>
 
-On receiving the notification in a future turn, map the line to a user-facing message and report.
+On receiving either notification in a future turn, map the line to a user-facing message and report.
 
 ### 3. Report to user
 
@@ -109,11 +123,14 @@ Use the manifest values to fill in `<placeholders>`:
 
 ```
 Committee loop spawned.
-- Session:  <SESSION>
-- Worktree: <WORKTREE_PATH>
-- Branch:   <BRANCH>
-- Target:   <TARGET_FILES_JOINED>
-- Watcher:  background shell <SHELL_ID> (I'll notify you when it fires)
+- Session:       <SESSION>
+- Worktree:      <WORKTREE_PATH>
+- Branch:        <BRANCH>
+- Target:        <TARGET_FILES_JOINED>
+- Watcher:       background shell <WATCHER_SHELL_ID> (fires on terminal state, polls every 15s)
+- Health check:  background shell <HEALTH_SHELL_ID> (fires once at T+4.5m with a progress snapshot)
+
+I'll send you a progress update in 4.5 minutes and again whenever the loop finishes (within ~15s of terminal state).
 
 Monitor:  tmux attach -t <SESSION>      (Ctrl-b d to detach)
 Peek:     tmux capture-pane -t <SESSION> -p | tail -40
@@ -134,6 +151,7 @@ Outcomes (artifacts land under <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/):
 - **`inner-agent.md`** — discipline for the detached Claude inside the worktree: per-iteration workflow, quorum/severity/ledger gates, convergence exit. Copied to `.committee-loop-instructions.md` at spawn.
 - **`post-body.sh`** — body of `.committee-loop-post.sh`. Runs at loop completion: validates origin hasn't drifted, atomically copies reviewed bytes back to origin, commits, tears down worktree + tmux.
 - **`watcher-body.sh`** — body of `.committee-loop-watcher.sh`. Polls sentinel files every 15s, 24h cap. Exit stdout tells the outer agent how the loop ended.
+- **`health-check-body.sh`** — body of `.committee-loop-health-check.sh`. Sleeps 270s (4.5m) then emits a one-shot `HEALTHY` / `FINISHED_EARLY:*` / `TMUX_DIED_EARLY` line so the outer agent can report mid-run progress instead of fire-and-forget.
 - **`SKILL.md`** (this file) — what the outer agent reads at `/committee-loop` invocation.
 </architecture>
 

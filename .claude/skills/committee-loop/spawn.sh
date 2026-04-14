@@ -132,7 +132,7 @@ git config user.name >/dev/null && git config user.email >/dev/null \
   || { echo "git user.name/user.email not configured; committee-loop needs both for worktree + copy-back commits" >&2; exit 1; }
 
 # Body files must exist before we try to cat them into the generated scripts.
-for required in inner-agent.md post-body.sh watcher-body.sh; do
+for required in inner-agent.md post-body.sh watcher-body.sh health-check-body.sh; do
   [ -f "$SCRIPT_DIR/$required" ] \
     || { echo "committee-loop skill corrupt: $SCRIPT_DIR/$required missing" >&2; exit 1; }
 done
@@ -232,6 +232,22 @@ ART_DIR="$ORIGIN_GIT_DIR/committee-loop/$SESSION"
 } > "$WATCHER_SCRIPT"
 cat "$SCRIPT_DIR/watcher-body.sh" >> "$WATCHER_SCRIPT"
 chmod +x "$WATCHER_SCRIPT"
+
+# ---- Build health-check.sh (header + health-check-body.sh) ----
+
+# One-shot 4.5m mid-run health ping. Lets the invoking session report "still
+# running healthy" (or early-death/early-finish) instead of fire-and-forget.
+# Terminal outcomes are still the watcher's job.
+HEALTH_CHECK_SCRIPT="$WORKTREE_PATH/.committee-loop-health-check.sh"
+
+{
+  printf '#!/usr/bin/env bash\nset -u\n'
+  printf 'SESSION=%q\n' "$SESSION"
+  printf 'WORKTREE_PATH=%q\n' "$WORKTREE_PATH"
+  printf 'ART_DIR=%q\n' "$ART_DIR"
+} > "$HEALTH_CHECK_SCRIPT"
+cat "$SCRIPT_DIR/health-check-body.sh" >> "$HEALTH_CHECK_SCRIPT"
+chmod +x "$HEALTH_CHECK_SCRIPT"
 
 # ---- Build the wrapper prompt the tmux session receives ----
 
@@ -354,6 +370,7 @@ MANIFEST="$WORKTREE_PATH/.committee-loop-manifest.txt"
   printf 'ORIGIN_REF=%q\n' "$ORIGIN_REF"
   printf 'ORIGIN_GIT_DIR=%q\n' "$ORIGIN_GIT_DIR"
   printf 'WATCHER_SCRIPT=%q\n' "$WATCHER_SCRIPT"
+  printf 'HEALTH_CHECK_SCRIPT=%q\n' "$HEALTH_CHECK_SCRIPT"
   printf 'TARGET_FILES_JOINED=%q\n' "$TARGET_JOINED"
 } > "$MANIFEST"
 # Print to stdout separately (non-pipeline) so a `tee` failure under pipefail
