@@ -641,7 +641,7 @@ printf '\n%s\n' "$RALPH_INVOCATION" >> "$PROMPT_FILE"
 ```bash
 # -x/-y are required: a detached tmux session with no client attached defaults to a terminal
 # size too small for Claude's TUI to render (the pane stays blank, readiness never triggers).
-tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$WORKTREE_PATH" "claude --dangerously-skip-permissions --effort max"
+tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$WORKTREE_PATH" "claude --dangerously-skip-permissions --effort high"
 
 READY=false
 TRUST_DISMISSED=false
@@ -738,7 +738,7 @@ cat "$MANIFEST"
 
 Notes:
 - `--dangerously-skip-permissions` suppresses most permission prompts but does NOT bypass Claude Code's protected-paths guard for writes under `.claude/` (claude-code#35718). The watchdog above handles that case — targets outside `.claude/` never trigger the prompt and the watchdog exits when the session ends. It does NOT sandbox — scope is enforced by the ralph-loop prompt's "DO NOT fix or modify ANY files other than $TARGET_JOINED" clause.
-- `--effort max` is supported (`claude --help | grep -- --effort`) and materially improves the loop agent's discipline around the ledger/verification steps.
+- `--effort high` balances the loop agent's discipline around the ledger/verification steps against total wall-time. `max` is available and supported but its per-turn reasoning cost rarely pays off for single-file reviews; `high` is the sweet spot.
 
 ### 7. Install the status watcher
 
