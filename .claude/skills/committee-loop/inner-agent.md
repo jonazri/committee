@@ -36,7 +36,7 @@ Both clean AND converged exits use this same tag. Convergence reason lives in `.
 
 ### 1. Simplify pre-pass (iter-1 only)
 
-Dispatch `simplify` CONCURRENTLY with the reviewers in step 2. All four (simplify + Claude + Kiro + Codex) run in parallel against the baseline. Wall-time is bounded by the slowest, not the sum.
+Dispatch `simplify` CONCURRENTLY with the reviewers in step 2. Pass `model: "sonnet"` on the Agent call — simplify's sub-agents do narrow pattern-matching work (find duplication, dead code, unused params) where Sonnet matches Opus at ~2× the throughput. All four (simplify + Claude + Kiro + Codex) run in parallel against the baseline. Wall-time is bounded by the slowest, not the sum.
 
 Apply simplify's non-contentious fixes, commit as `simplify iter-1: <brief summary>` BEFORE the `fix iter-1` commit, so the ledger and `git diff HEAD~1` references resolve correctly. If simplify returns nothing, commit nothing and move on.
 
@@ -48,15 +48,39 @@ SKIP simplify on iter-2+. Reviewers cover remaining simplification as Minor find
 
 **Iter-1 — fast mode (Claude + Kiro + Codex, skip Gemini).** Dispatch three reviewers in parallel, concurrent with simplify:
 
-a. `superpowers:code-reviewer` subagent with prompt: *"Review <TARGET> for code quality, bugs, design, shell safety. Output a Critical/Important/Minor list with line references and verification commands where possible."*
+a. `superpowers:code-reviewer` subagent (Agent tool, default model — Opus for iter-1's baseline review) with prompt: *"Review <TARGET> for code quality, bugs, design, shell safety. Output a Critical/Important/Minor list with line references and verification commands where possible."*
 
 b. `kiro-cli chat --no-interactive --trust-tools=fs_read` with the same prompt against the target file path. Write output to `.committee-loop-iter1-kiro.txt`.
 
-c. `codex exec --skip-git-repo-check --sandbox read-only -o .committee-loop-iter1-codex.txt "Review <TARGET> ..."` (same prompt).
+c. `codex exec --skip-git-repo-check --sandbox read-only -c model_reasoning_effort=high -o .committee-loop-iter1-codex.txt "Review <TARGET> ..."` (same prompt, explicit `high` reasoning — user's global config may default to `xhigh` which takes ~2× as long with negligible findings-quality gain for this review scale).
 
 Do NOT use `/committee` in iter-1 — its coordinator includes Gemini and its own synthesis. Synthesize the three reports into a single Critical/Important/Minor list yourself.
 
 **Iter-2+ — full mode.** Use `/committee --files <TARGET...>` (all 4 reviewers including Gemini). In multi-target runs, pass every `TARGET_FILES` entry as separate space-separated arguments after `--files`. Gemini's perspective joins once the file is already cleaner from iter-1 fixes, reducing noise.
+
+<target_segmentation>
+Before dispatching `/committee` in iter-N (N≥2), filter `TARGET_FILES` to only those changed since the iter-(N−1) commit:
+
+```bash
+git diff HEAD~1 --name-only -- <TARGET_FILES> 2>/dev/null
+```
+
+Pass ONLY the changed subset to `/committee --files`. Unchanged targets were already reviewed at this baseline in iter-(N−1) — re-reviewing them is pure waste. Ledger per-file convergence is tracked implicitly: a file that stops changing stops being reviewed.
+
+If the filter yields ZERO files (nothing changed since iter-(N−1)), that IS the `clean` convergence trigger — go directly to step 6 convergence check without dispatching `/committee`.
+</target_segmentation>
+
+<model_selection>
+Starting in iter-3, pass `--reviewer-model=sonnet` to `/committee` to select Sonnet for the Claude reviewer:
+
+```
+/committee --files <changed-target-list> --reviewer-model=sonnet
+```
+
+Rationale: iter-1 and iter-2 use Opus because the ledger architecture is still forming and the broadest-possible review is worth the wall-time. By iter-3, the Critical/Important findings that are easy to surface have been surfaced; remaining issues are subtler but still within Sonnet's range. Sonnet returns reviews in ~3 min vs Opus's ~8 min. The quorum gate tolerates any per-reviewer miss. If review quality visibly degrades (sudden spike in iter-3+ rejected findings or re-flagged issues), revert this flag.
+
+Keep Opus for iter-1 and iter-2 by omitting `--reviewer-model` entirely (harness default).
+</model_selection>
 
 ### 3. Classify with streaming verifier dispatch
 
@@ -126,8 +150,14 @@ This is the "end" half of the "simplify at beginning and end" design. Simplify p
 
 Use `.committee-loop-FINAL-PASS-DONE` as a single-shot flag. If it exists, skip to step 5.
 
-1. Run `simplify` on the target (same workflow as iter-1's simplify). Apply non-contentious fixes, commit as `simplify final: <summary>`. If nothing, no commit.
-2. Run a full committee pass (`/committee --files <TARGET...>` — all 4 reviewers including Gemini) using the section-3 and section-4 workflow (verifier dispatch, three gates, sequential apply). Commit applied fixes as `fix final: ...`.
+<skip_check>
+**Step 0. Skip-check (runs first).** Count `Decision: applied` entries in `.committee-loop-decisions.md` for EACH of the two most recent iterations (use the iteration headers in the ledger to delimit sections). If BOTH counts are zero, the codebase has stabilized — the final pass's safety-net value no longer justifies its wall-time cost. Skip steps 1–2 and jump to step 3.
+
+If only the current iteration had zero applies but iter-(N−1) had ≥1, run the full pass below — the safety net is still warranted.
+</skip_check>
+
+1. Run `simplify` on the target with `model: "sonnet"` (same workflow as iter-1's simplify). Apply non-contentious fixes, commit as `simplify final: <summary>`. If nothing, no commit.
+2. Run a full committee pass (`/committee --files <TARGET...> --reviewer-model=sonnet` — all 4 reviewers including Gemini, Claude reviewer at Sonnet) using the section-3 and section-4 workflow (verifier dispatch, three gates, sequential apply). Commit applied fixes as `fix final: ...`. In multi-target runs, apply target segmentation here too — only pass files that changed since the last iteration's commit.
 3. Run `bash .committee-loop-post.sh`.
 4. Create `.committee-loop-FINAL-PASS-DONE` (empty marker) AFTER post.sh returns. The flag only matters on the BLOCKED path where post.sh preserves the worktree and ralph-loop may re-feed the prompt; the flag suppresses redundant re-entry. On CLEAN, post.sh tears down the worktree + tmux session itself and the flag is moot. AFTER is the safe ordering: a crash between post.sh and flag-creation re-runs the final pass with consistent already-committed-or-BLOCKED state; the inverse ordering would let a crash between flag-creation and post.sh skip copy-back entirely.
 5. If `.committee-loop-BLOCKED.txt` now exists → STOP, do NOT emit the promise. Otherwise emit `<promise>REVIEW CLEAN</promise>`.

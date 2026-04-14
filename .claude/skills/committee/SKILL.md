@@ -34,6 +34,8 @@ Parse the user's argument (if any) into one of these scopes:
 | freeform text | vague | keyword written to a file via Write tool |
 | no args | auto | — |
 
+**Optional cross-scope flag:** `--reviewer-model=<model>` (one of `opus`, `sonnet`, `haiku`) overrides the Claude reviewer's model. Parse it out of the args, pass it through to the Claude reviewer Agent dispatch below, and do NOT include it in the `prepare.sh` invocation. Defaults to the harness's default model if absent. Used by `committee-loop` in iter-3+ to trade Opus depth for Sonnet speed once most Critical/Important findings have surfaced.
+
 <validation>
 Validate ALL user-supplied structured values BEFORE invoking `prepare.sh`:
 - SHA / commit / range components: must match `^[0-9a-fA-F]{6,40}$` exactly.
@@ -117,7 +119,7 @@ Do not dispatch Claude or the coordinator — dispatching Claude first would orp
 
 ### Claude reviewer (background)
 
-Dispatch via `Agent` with `subagent_type: "superpowers:code-reviewer"` and `run_in_background: true`. Fill the template's parameters from the manifest:
+Dispatch via `Agent` with `subagent_type: "superpowers:code-reviewer"` and `run_in_background: true`. If `--reviewer-model=<model>` was parsed at the top, also pass `model: "<model>"` on this Agent call; otherwise omit `model` (harness default). Fill the template's parameters from the manifest:
 - `WHAT_WAS_IMPLEMENTED` — SCOPE_DESCRIPTION
 - `PLAN_OR_REQUIREMENTS` — SPEC_PATH if set, else "General code review — no specific plan"
 - `BASE_SHA` / `HEAD_SHA` — from manifest (omit for uncommitted / files / plan)
