@@ -46,6 +46,11 @@ The argument MUST include at least one concrete repo-relative file path. If no p
 Parse one or more repo-relative file paths from the user's argument, then call `spawn.sh` with those paths as positional args. Locate the skill dir via a find lookup that works whether the skill is fully installed under `~/.claude/skills/` or only has `SKILL.md` symlinked (common) — in the symlink case, resolve the symlink to find the real dir where `spawn.sh` lives:
 
 ```bash
+# Resolve repo root explicitly — outer agent's cwd is not guaranteed to be the
+# repo root, so a bare `find .claude ...` would miss a repo-installed skill.
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+SEARCH_ROOTS=( "$HOME/.claude" )
+[ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/.claude" ] && SEARCH_ROOTS+=( "$REPO_ROOT/.claude" )
 SKILL_DIR=""
 while IFS= read -r candidate; do
   if [ -f "$candidate/spawn.sh" ]; then
@@ -56,7 +61,7 @@ while IFS= read -r candidate; do
     real_dir=$(dirname -- "$real")
     [ -f "$real_dir/spawn.sh" ] && { SKILL_DIR="$real_dir"; break; }
   fi
-done < <(find "$HOME/.claude" .claude -type d -name committee-loop 2>/dev/null)
+done < <(find "${SEARCH_ROOTS[@]}" -type d -name committee-loop 2>/dev/null)
 [ -n "$SKILL_DIR" ] || { echo "committee-loop skill not found (no spawn.sh adjacent to SKILL.md)" >&2; exit 1; }
 bash "$SKILL_DIR/spawn.sh" <path1> [<path2> ...]
 ```
@@ -117,8 +122,8 @@ Cancel:   tmux kill-session -t <SESSION> && git worktree remove --force <WORKTRE
 Outcomes (artifacts land under <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/):
 - REVIEW CLEAN                 -> post.sh copies back, commits, writes DONE, tears down.
 - REVIEW CLEAN + CONVERGED.txt -> same as CLEAN, but the sidecar names an oscillating finding; check decisions.md.
-- .committee-loop-BLOCKED.txt   -> origin target changed/became-a-symlink during review, a multi-target run blocked mid-loop, or origin's branch moved.
-                                   Any vetted writes ARE committed (marked "(PARTIAL)" or "(BRANCH MOVED)"); worktree preserved for inspection.
+- .committee-loop-BLOCKED.txt   -> origin target changed/became-a-symlink during review, a multi-target run blocked mid-loop, origin's branch moved, or origin had unrelated staged index changes that would be swept into the review commit.
+                                   Vetted writes ARE committed (marked "(PARTIAL)" or "(BRANCH MOVED)") EXCEPT when the block reason is an index conflict (pre-existing OR concurrent unrelated staged changes): those runs leave reviewed bytes in origin's working tree UNCOMMITTED and the user must resolve the conflicting index state before staging/committing manually. Worktree preserved for inspection either way.
 - .committee-loop-EXHAUSTED.txt -> ran out of ralph iterations without emitting the promise; no copy-back, worktree preserved.
 ```
 
@@ -134,7 +139,7 @@ Outcomes (artifacts land under <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/):
 
 ## Notes
 
-- macOS: install `coreutils` (`brew install coreutils`) so GNU `realpath -e` and `sha256sum` are on PATH for subprocesses.
+- macOS: install `coreutils` (`brew install coreutils`) AND put the gnubin symlinks on PATH so `realpath`, `sha256sum`, `readlink -f`, and `timeout` resolve to the GNU variants (not BSD `readlink` which lacks `-f`, and not a missing `timeout`). Example: `export PATH="$(brew --prefix)/opt/coreutils/libexec/gnubin:$PATH"` in your shell profile. `spawn.sh` preflight probes `timeout` and behavior-probes `realpath -e` so a missing GNU variant fails fast.
 - `--dangerously-skip-permissions` does NOT bypass Claude Code's protected-paths guard for writes under `.claude/` (claude-code#35718). `spawn.sh` launches a watchdog that auto-answers that prompt. Targets outside `.claude/` never trigger it. Scope is enforced by the inner-agent instructions, not by sandboxing.
 - `--effort high` is the sweet spot for loop-agent discipline vs wall-time; `max` rarely pays off for single-file reviews.
 - Each ralph iteration is capped at 10; if the loop doesn't converge within that, the watcher reports `EXHAUSTED` and the worktree is preserved for inspection.

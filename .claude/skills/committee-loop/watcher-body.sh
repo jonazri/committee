@@ -13,8 +13,21 @@ classify() {
     fi
     return 0
   fi
+  # Prefer the worktree sentinel; fall back to ART_DIR/BLOCKED.txt which
+  # survives worktree removal (written by post.sh's worktree-missing branch).
+  local blocked=""
   if [ -f "$WORKTREE_PATH/.committee-loop-BLOCKED.txt" ]; then
-    echo "BLOCKED:$(head -1 "$WORKTREE_PATH/.committee-loop-BLOCKED.txt")"
+    blocked="$WORKTREE_PATH/.committee-loop-BLOCKED.txt"
+  elif [ -f "$ART_DIR/BLOCKED.txt" ]; then
+    blocked="$ART_DIR/BLOCKED.txt"
+  fi
+  if [ -n "$blocked" ]; then
+    # Fold newlines to "; " so multi-line block reasons (partial-write +
+    # branch-moved) survive on a single `BLOCKED:<reason>` output line.
+    # awk is used instead of sed because `sed 's/\037.../'` interprets `\037`
+    # as a 4-char literal escape (not byte 0x1F) in POSIX BRE, so the prior
+    # tr|sed pipeline emitted literal 0x1F bytes instead of `; ` separators.
+    echo "BLOCKED:$(awk 'NR>1{printf "; "} {printf "%s", $0}' "$blocked")"
     return 0
   fi
   if [ -f "$WORKTREE_PATH/.committee-loop-EXHAUSTED.txt" ]; then

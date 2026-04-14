@@ -15,13 +15,16 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # end of this script. INT/TERM/HUP/QUIT included so Ctrl-C, terminal hangup,
 # or kill between worktree creation and tmux spawn also unwinds.
 cleanup_on_error() {
-  local rc=$?
+  local rc="${1:-$?}"
   [ -n "${SESSION:-}" ] && tmux kill-session -t "$SESSION" 2>/dev/null || true
   [ -n "${WORKTREE_PATH:-}" ] && git worktree remove --force "$WORKTREE_PATH" 2>/dev/null || true
   [ -n "${BRANCH:-}" ] && git branch -D "$BRANCH" 2>/dev/null || true
-  exit $rc
+  exit "$rc"
 }
-trap cleanup_on_error ERR INT TERM HUP QUIT
+trap 'cleanup_on_error $?' ERR
+# Signal traps pass 130 explicitly — without it, a SIGINT before any command
+# has failed leaves $? at 0 and we'd exit 0, indistinguishable from success.
+trap 'cleanup_on_error 130' INT TERM HUP QUIT
 
 # ---- Preflight: args, targets, tools, skills, git identity ----
 
@@ -32,9 +35,23 @@ trap cleanup_on_error ERR INT TERM HUP QUIT
 }
 
 ORIGIN_PATH=$(git rev-parse --show-toplevel)
+# Positive allowlist for the origin repo path: only [a-zA-Z0-9._/-]. Anything
+# else (parens, brackets, braces, commas, `*`, `?`, `#`, `!`, whitespace,
+# shell metacharacters) would survive a naive deny-list but its %q escape
+# breaks SKILL.md's documented `bash "<WATCHER_SCRIPT>"` wrapper — e.g.
+# `printf '%q' '/foo(bar)'` → `/foo\(bar\)`, and backslash-paren inside
+# double quotes is literal. Allowlist keeps the generated manifest values
+# safe inside double quotes.
+case "$ORIGIN_PATH" in
+  *[!a-zA-Z0-9._/-]*)
+    echo "origin repo path contains disallowed character: $ORIGIN_PATH" >&2
+    echo "committee-loop requires the repo path to match [a-zA-Z0-9._/-] only — rename or move the repo." >&2
+    exit 1 ;;
+esac
 TARGET_FILES=( "$@" )
 
-for f in "${TARGET_FILES[@]}"; do
+for i in "${!TARGET_FILES[@]}"; do
+  f="${TARGET_FILES[$i]}"
   case "$f" in
     /*)
       # Downstream builds "$ORIGIN_PATH/$f"; an absolute $f produces a
@@ -42,10 +59,14 @@ for f in "${TARGET_FILES[@]}"; do
       echo "target must be repo-relative, not absolute: $f" >&2; exit 1 ;;
   esac
   case "$f" in
-    *[\"\`\$\\]* | *$'\n'*)
-      # Reject shell metacharacters that would break downstream quoting
-      # (ralph-loop's unquoted $ARGUMENTS, the %q-generated post-script header).
-      echo "target contains shell metacharacter (\", \`, \$, \\, newline): $f" >&2; exit 1 ;;
+    *[!a-zA-Z0-9._/-]*)
+      # Positive allowlist: only [a-zA-Z0-9._/-]. Other characters (parens,
+      # brackets, braces, commas, *, ?, #, !, whitespace, shell metachars)
+      # would survive a deny-list but their %q escaping breaks the
+      # `bash "<WATCHER_SCRIPT>"` pattern documented in SKILL.md and the
+      # unquoted $ARGUMENTS substitution in ralph-loop's slash-command
+      # template. Matches the ORIGIN_PATH allowlist above.
+      echo "target contains disallowed character (allowed: [a-zA-Z0-9._/-]): $f" >&2; exit 1 ;;
   esac
   # Under --dangerously-skip-permissions an un-validated path is an arbitrary-
   # file-write primitive.
@@ -56,9 +77,15 @@ for f in "${TARGET_FILES[@]}"; do
     "$ORIGIN_PATH"/*) ;;
     *) echo "target resolves outside origin: $f -> $ABS" >&2; exit 1 ;;
   esac
+  # Canonicalize to the repo-relative form git will see in its index.
+  # Non-canonical user input like `./foo.sh` or `sub/../foo.sh` would otherwise
+  # survive through post-body.sh's WRITTEN array and mismatch the index names
+  # returned by `git diff --cached --name-only` (git normalizes paths) —
+  # producing a spurious "unexpected paths" BLOCKED.
+  TARGET_FILES[$i]="${ABS#$ORIGIN_PATH/}"
 done
 
-for t in tmux claude git realpath sha256sum kiro-cli codex gemini; do
+for t in tmux claude git realpath sha256sum kiro-cli codex gemini timeout; do
   command -v "$t" >/dev/null || { echo "missing tool: $t" >&2; exit 1; }
 done
 
@@ -136,7 +163,7 @@ for f in "${TARGET_FILES[@]}"; do
   mkdir -p "$WORKTREE_PATH/$(dirname -- "$f")"
   cp -P "$ORIGIN_PATH/$f" "$WORKTREE_PATH/$f"
   HASH=$(sha256sum "$WORKTREE_PATH/$f" | awk '{print $1}')
-  [ -n "$HASH" ] || { echo "sha256sum produced empty hash for $f" >&2; exit 1; }
+  [ -n "$HASH" ] || { echo "sha256sum produced empty hash for $f" >&2; cleanup_on_error 1; }
   SEED_HASHES+=( "$HASH" )
 done
 (
@@ -172,7 +199,7 @@ ORIGIN_REF=$(git -C "$ORIGIN_PATH" rev-parse --abbrev-ref HEAD)
 # without a branch name, copy-back would commit to detached HEAD and the commit
 # would be invisible from any branch.
 [ "$ORIGIN_REF" != "HEAD" ] \
-  || { echo "origin is on detached HEAD; committee-loop requires a named branch so copy-back lands where the user expects" >&2; exit 1; }
+  || { echo "origin is on detached HEAD; committee-loop requires a named branch so copy-back lands where the user expects" >&2; cleanup_on_error 1; }
 
 {
   printf '#!/usr/bin/env bash\nset -euo pipefail\n'
@@ -262,10 +289,12 @@ if ! $READY; then
   exit 1
 fi
 
-# Clear the cleanup trap BEFORE the paste window below — any ERR from tmux
+# Clear ONLY the ERR trap before the paste window — any ERR from tmux
 # capture-pane/grep/send-keys would otherwise trip the trap and tear down the
 # session we just confirmed alive. Paste failures are recoverable by attaching.
-trap - ERR INT TERM HUP QUIT
+# Keep INT/TERM/HUP/QUIT live so a signal during paste/manifest emission still
+# tears down the session+worktree+branch (otherwise Ctrl-C mid-paste leaks them).
+trap - ERR
 
 # Bracketed paste (-p) so multi-line content is delivered atomically. Without
 # it tmux converts LF to CR, which in a TUI submits line-by-line and fragments
@@ -290,13 +319,22 @@ done
 # Protected-paths watchdog. Claude Code prompts on `.claude/` edits even under
 # --dangerously-skip-permissions (claude-code#35718). Detached agent can't
 # answer interactively — poll from outside and pick option 2 (session-scoped).
+# Observed prompt wording (claude-code 1.x): sentinel "Yes, and allow Claude to
+# edit its own settings" identifies this specific prompt; option 2 is the
+# "session-only allow" variant. If Claude Code reorders the menu in a future
+# release, "2" will select whatever is at that slot — check the sentinel + this
+# assumption together when upgrading claude-code.
 # 12h cap guards against a leaked watchdog; exits when tmux session dies.
 nohup bash -c '
   end=$(( $(date +%s) + 43200 ))
   while [ "$(date +%s)" -lt "$end" ] && tmux has-session -t "$1" 2>/dev/null; do
     if tmux capture-pane -t "$1" -p 2>/dev/null | grep -qF "Yes, and allow Claude to edit its own settings"; then
       tmux send-keys -t "$1" "2"; sleep 0.3; tmux send-keys -t "$1" Enter
-      break
+      # Do NOT break here: the permission prompt may re-fire across ralph-loop
+      # iterations (each iteration runs its own inner-agent turn, and session-
+      # scope persistence is a runtime assumption). Debounce 5s so we do not
+      # answer the same prompt twice before the TUI redraws.
+      sleep 5
     fi
     sleep 3
   done
