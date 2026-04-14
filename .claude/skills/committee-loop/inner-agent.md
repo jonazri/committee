@@ -30,6 +30,8 @@ Both clean AND converged exits use this same tag. Convergence reason lives in `.
 **Run `bash .committee-loop-post.sh` BEFORE emitting the promise.** If the promise goes first, ralph may terminate before post.sh runs.
 
 **Never emit the promise if `.committee-loop-BLOCKED.txt` exists after post.sh returns.** post.sh exits 0 on BLOCKED; the sidecar is the signal. On BLOCKED, do NOT emit the promise — let ralph terminate via iteration exhaustion. The watcher will report BLOCKED to the invoker.
+
+**The authoritative clean-exit signal is the `DONE` sentinel written by post.sh — not the promise.** On the clean path post.sh's last step is `tmux kill-session`, which kills this agent's shell; the promise may not land before the session dies. That's fine — the watcher classifies on `DONE`, and ralph-loop terminates along with the session. Always emit the promise anyway so the stop-hook has a chance to fire if it runs before session teardown.
 </exit_protocol>
 
 ## Per-iteration workflow
@@ -46,13 +48,13 @@ SKIP simplify on iter-2+. Reviewers cover remaining simplification as Minor find
 
 ### 2. Review
 
-**Iter-1 — fast mode (Claude + Kiro + Codex, skip Gemini).** Dispatch three reviewers in parallel, concurrent with simplify:
+**Iter-1 — fast mode (Claude + Kiro + Codex, skip Gemini).** Dispatch three reviewers in parallel, concurrent with simplify. For multi-target runs, pass ALL target paths together in each reviewer's prompt (one reviewer call per reviewer, not one per file) so the quorum gate operates on a single unified report per reviewer:
 
-a. `superpowers:code-reviewer` subagent (Agent tool, default model — Opus for iter-1's baseline review) with prompt: *"Review <TARGET> for code quality, bugs, design, shell safety. Output a Critical/Important/Minor list with line references and verification commands where possible."*
+a. `superpowers:code-reviewer` subagent (Agent tool, default model — Opus for iter-1's baseline review) with prompt: *"Review <TARGET...> for code quality, bugs, design, shell safety. Output a Critical/Important/Minor list with line references and verification commands where possible."* The Agent tool has no explicit timeout flag — the harness bounds it internally. If the subagent is still running 15 minutes after dispatch, abandon it (stop waiting for its result) and proceed with the remaining reviewers.
 
-b. `kiro-cli chat --no-interactive --trust-tools=fs_read` with the same prompt against the target file path. Write output to `.committee-loop-iter1-kiro.txt`.
+b. `timeout 900 kiro-cli chat --no-interactive --trust-tools=fs_read` with the same prompt listing every target path. Write output to `.committee-loop-iter1-kiro.txt`. On timeout, `rm -f .committee-loop-iter1-kiro.txt` before synthesis so a partial report isn't parsed; 2-of-3 quorum from Claude+Codex still holds.
 
-c. `codex exec --skip-git-repo-check --sandbox read-only -c model_reasoning_effort=high -o .committee-loop-iter1-codex.txt "Review <TARGET> ..."` (same prompt, explicit `high` reasoning — user's global config may default to `xhigh` which takes ~2× as long with negligible findings-quality gain for this review scale).
+c. `timeout 900 codex exec --skip-git-repo-check --sandbox read-only -c model_reasoning_effort=high -o .committee-loop-iter1-codex.txt "Review <TARGET...> ..."` (same prompt, explicit `high` reasoning — user's global config may default to `xhigh` which takes ~2× as long with negligible findings-quality gain for this review scale). The 15m wall-clock cap prevents a hung Codex from blocking iter-1 indefinitely; on timeout, `rm -f .committee-loop-iter1-codex.txt` before synthesis to avoid parsing a truncated report — 2-of-3 quorum from Claude+Kiro still holds.
 
 Do NOT use `/committee` in iter-1 — its coordinator includes Gemini and its own synthesis. Synthesize the three reports into a single Critical/Important/Minor list yourself.
 
