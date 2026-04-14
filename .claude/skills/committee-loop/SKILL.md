@@ -99,14 +99,14 @@ for f in "${TARGET_FILES[@]}"; do
   esac
 done
 
-for t in tmux claude git realpath sha256sum kiro-cli; do
+for t in tmux claude git realpath sha256sum kiro-cli codex gemini; do
   command -v "$t" >/dev/null || { echo "missing tool: $t"; exit 1; }
 done
 
 # realpath usage below (Step 1 + post-script) relies on GNU `-e`; BSD realpath
-# (default macOS) does not support it. Fail fast here rather than hitting a
-# cryptic error mid-run.
-realpath --help 2>&1 | grep -q -- '-e,' \
+# (default macOS) does not support it. Behavior probe (not help-text parse) so
+# wording changes across coreutils versions can't break it.
+realpath -e -- . >/dev/null 2>&1 \
   || { echo "realpath does not support -e (BSD realpath?); install GNU coreutils"; exit 1; }
 
 # --effort is referenced in Step 6 (tmux spawn); fail fast if this claude build
@@ -121,15 +121,31 @@ claude --help 2>/dev/null | grep -q -- --effort \
 git rev-parse --path-format=absolute --git-dir >/dev/null 2>&1 \
   || { echo "git too old (need 2.31+ for rev-parse --path-format); upgrade git"; exit 1; }
 
-# The workflow depends on three skills/plugins — ralph-loop (plugin), committee
-# (skill), and superpowers:receiving-code-review (skill). Check the filesystem
-# so missing dependencies surface here, not inside the detached tmux session.
-find "$HOME/.claude" -type d \( -name "ralph-loop" -o -path "*/plugins/*/ralph-loop*" \) 2>/dev/null | grep -q . \
-  || { echo "ralph-loop plugin not found under ~/.claude/; install it before running committee-loop"; exit 1; }
-[ -d "$HOME/.claude/skills/committee" ] || find "$HOME/.claude" -type d -name "committee" 2>/dev/null | grep -q . \
-  || { echo "committee skill not found under ~/.claude/; install it before running committee-loop"; exit 1; }
-find "$HOME/.claude" -type d \( -name "receiving-code-review" -o -path "*/superpowers*/receiving-code-review*" \) 2>/dev/null | grep -q . \
-  || { echo "superpowers:receiving-code-review skill not found under ~/.claude/; install it before running committee-loop"; exit 1; }
+# The workflow depends on installed skills/plugins. Only check the ones that
+# reliably show up as directories under ~/.claude or $ORIGIN_PATH/.claude:
+# ralph-loop (plugin dir), committee (skill dir), superpowers:receiving-code-review
+# (skill dir). `simplify` and `superpowers:code-reviewer` are NOT checked here:
+# the former is registered via a harness-level mechanism and doesn't appear as a
+# findable dir; the latter exists only as agent `.md` files (agents/code-reviewer.md)
+# in the superpowers plugin layout, not as a directory. If those dependencies are
+# missing at runtime, the inner Agent/Skill call surfaces the specific error itself.
+check_skill_or_plugin() {
+  local label="$1"; shift
+  local -a patterns=( "$@" )
+  local roots=( "$HOME/.claude" "$ORIGIN_PATH/.claude" )
+  local root pat
+  for root in "${roots[@]}"; do
+    [ -d "$root" ] || continue
+    for pat in "${patterns[@]}"; do
+      find "$root" -type d \( -name "$pat" -o -path "*/$pat" -o -path "*/$pat/*" \) 2>/dev/null | grep -q . && return 0
+    done
+  done
+  echo "$label not found under ~/.claude or $ORIGIN_PATH/.claude; install it before running committee-loop"
+  exit 1
+}
+check_skill_or_plugin "ralph-loop plugin"                       "ralph-loop"
+check_skill_or_plugin "committee skill"                         "committee"
+check_skill_or_plugin "superpowers:receiving-code-review skill" "receiving-code-review"
 
 # Commits inside the worktree (Step 3 seed) and at copy-back (post-script) both
 # require a git identity. Fail fast rather than inside the detached run.
@@ -167,7 +183,7 @@ Copy into the worktree first, then hash the worktree bytes. Those are the exact 
 ```bash
 declare -a SEED_HASHES=()
 for f in "${TARGET_FILES[@]}"; do
-  mkdir -p "$WORKTREE_PATH/$(dirname "$f")"
+  mkdir -p "$WORKTREE_PATH/$(dirname -- "$f")"
   cp -P "$ORIGIN_PATH/$f" "$WORKTREE_PATH/$f"
   HASH=$(sha256sum "$WORKTREE_PATH/$f" | awk '{print $1}')
   [ -n "$HASH" ] || { echo "sha256sum produced empty hash for $f"; exit 1; }
@@ -205,13 +221,15 @@ Preferably as the last line. Both clean and converged exits use the same tag —
 
 **Run \`bash .committee-loop-post.sh\` BEFORE emitting the promise** — if the promise goes first, ralph may terminate the session before post.sh runs.
 
+**Never emit \`<promise>REVIEW CLEAN</promise>\` if \`.committee-loop-BLOCKED.txt\` exists in the worktree after post.sh returns.** post.sh exits 0 on BLOCKED so the shell return code alone does not signal failure; the sidecar is the signal. On BLOCKED, do NOT emit the promise — let ralph-loop terminate naturally via iteration exhaustion (the watcher will report BLOCKED to the invoker).
+
 ## Per-iteration workflow
 
 Each iteration runs these steps in order.
 
 ### 1. Simplify pre-pass (iter-1 only, overlapped with reviewers)
 
-Simplify runs on iteration 1 ONLY as a pre-pass, and again at convergence exit as an end-pass (see section 6). SKIP this step on iterations 2+ — after iter-1 cleans up newly-written-code noise, the committee reviewers cover any remaining simplification opportunities as Minor findings.
+Simplify also runs at convergence exit as an end-pass (see section 6). SKIP this step on iterations 2+ — after iter-1 cleans up newly-written-code noise, the committee reviewers cover any remaining simplification opportunities as Minor findings.
 
 For iter-1: dispatch \`simplify\` CONCURRENTLY with the reviewers in section 2 (not before them). All four — simplify, Claude, Kiro, Codex — run in parallel against the original baseline. Simplify's 3 sub-agents average ~9m; reviewers average 3-8m; wall-time is bounded by the slowest of the four, not by their sum.
 
@@ -237,13 +255,19 @@ Do NOT use \`/committee\`; the coordinator's dispatch pattern includes Gemini an
 
 **Iteration 2+ — full mode:**
 
-Use \`/committee --files <TARGET>\` (all 4 reviewers, including Gemini) for a thorough subsequent pass. Gemini's perspective joins once the file is already cleaner from iter-1 fixes, reducing noise.
+Use \`/committee --files <TARGET...>\` (all 4 reviewers, including Gemini) for a thorough subsequent pass. In multi-target runs, pass every entry from \`TARGET_FILES\` as separate space-separated arguments after \`--files\` (the committee skill expects \`--files <path1> [path2...]\`). Gemini's perspective joins once the file is already cleaner from iter-1 fixes, reducing noise.
 
-### 3. Classify with streaming verifier dispatch
+### 3. Classify with verifier dispatch
 
-Do NOT wait for ALL reviewers to finish before dispatching verifiers. As each reviewer's output becomes ready (Kiro/Codex/Gemini: output file exists and is complete; Claude: subagent returned), IMMEDIATELY dispatch that reviewer's verifier subagent in parallel to any still-running reviewers and any in-flight verifiers. This overlaps verification with the tail-latency reviewer (typically Claude or Codex) and saves 3-7 minutes per iteration.
+**Per-iteration dispatch model:**
+- **Iter-1 (direct dispatch):** three reviewers run in parallel, each with its own completion signal. Streaming verifier dispatch (below) applies.
+- **Iter-2+ / final pass (\`/committee\` synthesis):** one synthesized report is returned. Dispatch a single verifier over it — no streaming needed.
 
-Concrete pattern: maintain a pending-reviewers set. In a polling loop (or via the parallel-agent dispatch tool's ready-callback), for each reviewer whose output just became available, remove it from pending and dispatch its verifier. Continue until pending is empty AND all dispatched verifiers have returned.
+In iter-1, the three reviewers (Claude subagent, Kiro background Bash, Codex background Bash) each have their own completion signal: the Agent tool returns when the subagent finishes, and background Bash calls fire a \`<task-notification>\` when the process exits (exit code + output file both final at that point — there is no partial-write window). Those completion signals ARE the "output ready" marker; no \`.done\` sentinel is needed.
+
+Do NOT wait for ALL reviewers to finish before dispatching verifiers. As each reviewer's completion signal fires, IMMEDIATELY dispatch that reviewer's verifier subagent in parallel to any still-running reviewers and any in-flight verifiers. This overlaps verification with the tail-latency reviewer and saves 3-7 minutes per iteration.
+
+Concrete pattern: maintain a pending-reviewers set. On each reviewer completion (Agent return OR task-notification), remove it from pending and dispatch its verifier. Continue until pending is empty AND all dispatched verifiers have returned.
 
 Each verifier:
 - Reads its reviewer's report
@@ -271,11 +295,18 @@ Append one entry per Critical/Important finding regardless of outcome:
 
 Same-file edits cannot be parallelized safely. Apply "applied" findings one at a time with the SMALLEST edit that addresses each. Commit with a message naming finding IDs: \`fix iter-<N>: apply <id1>, <id2>, ...\`.
 
-### 5. Post-script sync (mandatory if Step 5 of the target changed)
+### 5. Generated-file sync (mandatory for self-review)
 
-\`.committee-loop-post.sh\` was generated at spawn time. If your fix edits SKILL.md's Step 5 (the POST_SCRIPT template / \`<<'BODY'\` region), the on-disk post.sh still has the pre-fix logic. After any such fix, apply the equivalent edit directly to \`.committee-loop-post.sh\`, include it in the same commit, and note the sync in the ledger entry.
+This only matters when the committee-loop reviews ITSELF. For normal use (reviewing other files), the generated files are spawned fresh from the current SKILL.md and no sync is needed.
 
-Detection: \`git diff HEAD~1 -- <TARGET>\` shows changes in the POST_SCRIPT/BODY region.
+Several runtime files are generated from SKILL.md at spawn time: \`.committee-loop-post.sh\` (Step 5 BODY), \`.committee-loop-watcher.sh\` (Step 5 WATCHER region), \`.committee-loop-instructions.md\` (Step 4 heredoc), and \`.committee-loop-prompt.txt\` (Step 5 tail). If your fix edits SKILL.md's corresponding region, the on-disk file still has the pre-fix logic. Apply the equivalent edit directly to the affected file(s) in the same commit.
+
+- SKILL.md Step 5 BODY (\`<<'BODY'\`) → \`.committee-loop-post.sh\`
+- SKILL.md Step 5 WATCHER region → \`.committee-loop-watcher.sh\`
+- SKILL.md Step 4 heredoc (\`<<EOF\`) → \`.committee-loop-instructions.md\` (but note: the inner agent is typically running from conversational context by this point, so this sync is primarily about future-restart consistency)
+- SKILL.md Step 5 prompt region → \`.committee-loop-prompt.txt\` (only affects re-paste; usually moot after spawn)
+
+Detection: \`git diff HEAD~1 -- <TARGET>\` shows changes in any of the generator regions above. Post.sh sync is the most critical because post.sh actually runs at copy-back time.
 
 ### 6. Convergence exit
 
@@ -292,23 +323,23 @@ This is the "end" half of the "simplify at beginning and end" design. Simplify p
 Use \`.committee-loop-FINAL-PASS-DONE\` as a single-shot flag. If it already exists, skip to the emit step.
 
 1. Run \`simplify\` on the target (same workflow as iter-1's simplify). Apply any non-contentious fixes, commit as \`simplify final: <summary>\`. If nothing, no commit.
-2. Run a full committee pass (all 4 reviewers — Gemini included this time) using the same section-2/section-3/section-4 workflow (streaming verifier dispatch, quorum + severity + ledger gates, sequential apply). Commit any applied fixes as \`fix final: ...\`.
-3. Create \`.committee-loop-FINAL-PASS-DONE\` (empty marker) AFTER the committee pass completes.
-4. Run \`bash .committee-loop-post.sh\`.
-5. Emit \`<promise>REVIEW CLEAN</promise>\`.
+2. Run a full committee pass (all 4 reviewers — Gemini included this time) using the same section-2/section-3/section-4 workflow (verifier dispatch per section 3, quorum + severity + ledger gates, sequential apply). Commit any applied fixes as \`fix final: ...\`.
+3. Run \`bash .committee-loop-post.sh\`.
+4. Create \`.committee-loop-FINAL-PASS-DONE\` (empty marker) AFTER post.sh returns. The flag only matters on the BLOCKED path: if post.sh blocked, the worktree+tmux session survive and ralph-loop may re-feed the prompt; the flag then suppresses a redundant re-entry into the final-pass protocol. On the CLEAN path, post.sh tears down the worktree + tmux session itself, so step 4 never actually executes and ralph has no re-feed target — the flag is moot. The ordering (AFTER post.sh) is the safe default: a crash between post.sh and flag-creation simply re-runs the final pass, which will see the same (already-committed or BLOCKED) state and behave consistently. The inverse ordering would let a crash between flag-creation and post.sh make a later restart skip copy-back entirely.
+5. If \`.committee-loop-BLOCKED.txt\` now exists, STOP — do NOT emit the promise. Otherwise emit \`<promise>REVIEW CLEAN</promise>\`.
 
 The final pass is a safety net, not a regular iteration — whatever it applies (or rejects) is trusted on the same gates as any other iteration's findings, and the session ends after step 5 regardless of what the final pass surfaces. The ledger captures all findings for post-mortem inspection.
 
 ## Scope
 
-DO NOT fix or modify ANY files other than the target(s) above and these sidecars: \`.committee-loop-decisions.md\`, \`.committee-loop-DEFERRED.md\`, \`.committee-loop-CONVERGED.txt\`, \`.committee-loop-EXHAUSTED.txt\`, \`.committee-loop-FINAL-PASS-DONE\`, \`.committee-loop-post.sh\` (only when Post-script sync applies). NO implementation work in this session.
+DO NOT fix or modify ANY files other than the target(s) above and the loop's own sidecar files (anything matching \`.committee-loop-*\` at the worktree root: reviewer output files like \`.committee-loop-iter<N>-<reviewer>.txt\`, the decision ledger \`.committee-loop-decisions.md\`, the deferred list \`.committee-loop-DEFERRED.md\`, the convergence/exhaustion/block sentinels, \`.committee-loop-FINAL-PASS-DONE\`, and \`.committee-loop-post.sh\` — the last one ONLY when Post-script sync applies). NO implementation work in this session.
 EOF
 
 # The ralph-loop argument must be bash-safe because the ralph-loop slash-command template
 # substitutes $ARGUMENTS UNQUOTED. No backticks, no parens, no $, no quotes. Keep it short
 # and point at the instructions file for the actual rules.
 RALPH_PROMPT="Read .committee-loop-instructions.md and follow it exactly. Review the target files named in that file using the phase-based workflow described, then iterate per the instructions until you emit the REVIEW CLEAN promise."
-RALPH_INVOCATION="/ralph-loop:ralph-loop \"$RALPH_PROMPT\" --completion-promise \"REVIEW CLEAN\" --max-iterations 5"
+RALPH_INVOCATION="/ralph-loop:ralph-loop \"$RALPH_PROMPT\" --completion-promise \"REVIEW CLEAN\" --max-iterations 10"
 ```
 
 ralph-loop's stop-hook compares the extracted `<promise>` text to `--completion-promise` by **exact equality** (not substring). That's why the instructions above tell the inner agent to emit `<promise>REVIEW CLEAN</promise>` in BOTH the clean and converged cases, and to carry the convergence reason in a `.committee-loop-CONVERGED.txt` sidecar — a `<promise>REVIEW CONVERGED</promise>` would not release the loop.
@@ -318,12 +349,24 @@ ralph-loop's stop-hook compares the extracted `<promise>` text to `--completion-
 ```bash
 POST_SCRIPT="$WORKTREE_PATH/.committee-loop-post.sh"
 
+# Capture origin's branch at spawn time. post.sh re-checks this before copy-back
+# so a user `git switch`'ing the origin checkout during the detached run can't
+# cause the review commit to land on the wrong branch (even if content happens
+# to hash-match because of an identical file on the new branch).
+ORIGIN_REF=$(git -C "$ORIGIN_PATH" rev-parse --abbrev-ref HEAD)
+# HEAD detached at spawn ("HEAD") is rejected rather than silently accepted:
+# without a branch name, copy-back would commit to detached HEAD and the commit
+# would be invisible from any branch.
+[ "$ORIGIN_REF" != "HEAD" ] \
+  || { echo "origin is on detached HEAD; committee-loop requires a named branch so copy-back lands where the user expects"; exit 1; }
+
 {
   printf '#!/usr/bin/env bash\nset -euo pipefail\n'
   printf 'ORIGIN_PATH=%q\n' "$ORIGIN_PATH"
   printf 'WORKTREE_PATH=%q\n' "$WORKTREE_PATH"
   printf 'BRANCH=%q\n' "$BRANCH"
   printf 'SESSION=%q\n' "$SESSION"
+  printf 'ORIGIN_REF=%q\n' "$ORIGIN_REF"
   printf 'TARGET_FILES=('
   printf ' %q' "${TARGET_FILES[@]}"
   printf ' )\n'
@@ -334,6 +377,20 @@ POST_SCRIPT="$WORKTREE_PATH/.committee-loop-post.sh"
 
 cat >> "$POST_SCRIPT" <<'BODY'
 
+# Signal-safe TMP cleanup for the atomic cp-to-tmp + mv -f replace below.
+# Without this trap, SIGTERM between `cp -P "$rel" "$TMP"` and `mv -f "$TMP" "$dest"`
+# leaks a `.committee-loop.$$.tmp` file in origin's target directory.
+# Two traps: EXIT for cleanup-only on natural exit; INT/TERM/HUP also TERMINATE
+# via `exit 130` so a trapped signal stops post.sh rather than letting it
+# continue through copy-back + commit after the handler returns (bash's default
+# is to continue after a custom signal handler returns).
+TMP=""
+cleanup_tmp() {
+  [ -n "${TMP:-}" ] && rm -f -- "$TMP" 2>/dev/null || true
+}
+trap cleanup_tmp EXIT
+trap 'cleanup_tmp; exit 130' INT TERM HUP
+
 cd "$WORKTREE_PATH"
 
 # --git-common-dir (not ".git") because origin may itself be a linked worktree
@@ -342,6 +399,19 @@ cd "$WORKTREE_PATH"
 # returns the relative string ".git", which breaks `mkdir -p "$ART_DIR"` below
 # because our cwd is $WORKTREE_PATH where .git is a file, not a directory.
 ORIGIN_GIT_DIR=$(git -C "$ORIGIN_PATH" rev-parse --path-format=absolute --git-common-dir)
+
+# Refuse copy-back if origin's branch has moved since spawn. Without this,
+# a user who `git switch`'d origin during the detached run would get the
+# review commit on the new branch (bytes may hash-match because the same file
+# exists on the new branch). "HEAD" means origin is in detached state now —
+# also refuse. `|| true` on rev-parse so a transient git failure goes to the
+# explicit BLOCKED path below rather than tripping set -e silently.
+CURRENT_ORIGIN_REF=$(git -C "$ORIGIN_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+if [ "$CURRENT_ORIGIN_REF" != "$ORIGIN_REF" ]; then
+  printf 'origin branch changed during the review: was %s, now %s; refusing to copy back\n' "$ORIGIN_REF" "$CURRENT_ORIGIN_REF" > .committee-loop-BLOCKED.txt
+  echo "BLOCKED: origin branch changed ($ORIGIN_REF -> $CURRENT_ORIGIN_REF)" >&2
+  exit 0
+fi
 
 # Merged validate-then-write loop: separate validate/write loops leave a TOCTOU
 # window where a concurrent mutation (e.g. parent-dir symlink swap) can race
@@ -402,10 +472,24 @@ for i in "${!TARGET_FILES[@]}"; do
     *)
       BLOCK_MSG=$(printf 'worktree source %s resolves outside worktree (%s); refusing to overwrite\n' "$rel" "$SRC_ABS"); break ;;
   esac
-  # rm -f before cp so cp can't be tricked into writing through a destination
-  # symlink that appeared between the check above and the write below.
-  rm -f -- "$dest"
-  cp -P -- "$rel" "$dest"
+  # Atomic replace: cp to sibling tmp, then mv into place. Avoids the destructive
+  # window of `rm then cp` — if cp fails (EIO, EDQUOT, disk-full, perms race) the
+  # dest stays intact and BLOCK_MSG fires. `.$$` suffix is unique per post.sh
+  # process; explicit rm -f on the failure branches + the EXIT/INT/TERM trap above
+  # clean up the tmp file under command failure AND under signal.
+  TMP="$dest.committee-loop.$$.tmp"
+  rm -f -- "$TMP"
+  if ! cp -P -- "$rel" "$TMP"; then
+    rm -f -- "$TMP"
+    BLOCK_MSG=$(printf 'cp of worktree source %s to tmp failed; origin unchanged\n' "$rel"); break
+  fi
+  # mv -f overwrites dest atomically (rename(2) on same filesystem). If dest
+  # is itself a symlink, rename replaces the symlink — which is what we want,
+  # since the earlier `[ -L "$dest" ]` check already rejected symlinks.
+  if ! mv -f -- "$TMP" "$dest"; then
+    rm -f -- "$TMP"
+    BLOCK_MSG=$(printf 'atomic mv of %s into origin failed; origin unchanged\n' "$rel"); break
+  fi
   WRITTEN+=( "$rel" )
 done
 
@@ -421,10 +505,33 @@ fi
 # with uncommitted changes is worse than a "(PARTIAL)" commit the user can
 # see and decide to revert.
 if [ "${#WRITTEN[@]}" -gt 0 ]; then
+  # Re-check origin branch right before commit. The initial branch check runs
+  # before the validation+copy loop, which takes time — a user `git switch`'ing
+  # origin during that window would see our commit land on the current
+  # (changed) branch. `mv -f` in the loop has ALREADY written reviewed bytes
+  # to origin's working tree, so we CANNOT bail out without leaving origin
+  # dirty. Instead: commit anyway with a loud `(BRANCH MOVED)` note so the
+  # commit is visible and revertable, and set BLOCK_MSG so the existing
+  # exit-0-on-block path skips DONE+teardown.
+  REFRESH_ORIGIN_REF=$(git -C "$ORIGIN_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  BRANCH_MOVED=""
+  if [ "$REFRESH_ORIGIN_REF" != "$ORIGIN_REF" ]; then
+    BRANCH_MOVED="branch moved mid-post.sh from $ORIGIN_REF to $REFRESH_ORIGIN_REF"
+    if [ -z "$BLOCK_MSG" ]; then
+      BLOCK_MSG="$BRANCH_MOVED"
+      printf '%s\n' "$BRANCH_MOVED" > .committee-loop-BLOCKED.txt
+    else
+      BLOCK_MSG="$BLOCK_MSG; also $BRANCH_MOVED"
+      printf '%s\n' "$BRANCH_MOVED" >> .committee-loop-BLOCKED.txt
+    fi
+    echo "BLOCKED: $BRANCH_MOVED" >&2
+  fi
   git -C "$ORIGIN_PATH" add -- "${WRITTEN[@]}"
   if ! git -C "$ORIGIN_PATH" diff --cached --quiet -- "${WRITTEN[@]}"; then
     COMMIT_NOTE="review: apply committee-loop review to ${WRITTEN[*]}"
-    if [ -n "$BLOCK_MSG" ]; then
+    if [ -n "$BRANCH_MOVED" ]; then
+      COMMIT_NOTE="${COMMIT_NOTE} (BRANCH MOVED — ${BRANCH_MOVED}; commit lands on $REFRESH_ORIGIN_REF)"
+    elif [ -n "$BLOCK_MSG" ]; then
       COMMIT_NOTE="${COMMIT_NOTE} (PARTIAL — see .committee-loop-BLOCKED.txt)"
     elif [ -f .committee-loop-CONVERGED.txt ]; then
       # Surface the convergence-by-give-up case in git log so a reader can tell
@@ -446,10 +553,17 @@ fi
 # runs in the same repo don't overwrite each other's audit trail.
 ART_DIR="$ORIGIN_GIT_DIR/committee-loop/$SESSION"
 mkdir -p "$ART_DIR"
-git -C "$ORIGIN_PATH" rev-parse HEAD > "$ART_DIR/DONE"
+
+# Copy sidecars FIRST, write DONE LAST (atomic rename). The watcher's classify
+# checks DONE before CONVERGED.txt — if DONE were written before CONVERGED.txt
+# is copied, a sweep landing in that window would misreport a converged run as
+# plain DONE. Atomic rename ensures DONE appears only when all sidecars are in
+# place.
 [ -f .committee-loop-decisions.md ] && cp .committee-loop-decisions.md "$ART_DIR/decisions.md"
 [ -f .committee-loop-DEFERRED.md ]  && cp .committee-loop-DEFERRED.md  "$ART_DIR/deferred.md"
 [ -f .committee-loop-CONVERGED.txt ] && cp .committee-loop-CONVERGED.txt "$ART_DIR/CONVERGED.txt"
+git -C "$ORIGIN_PATH" rev-parse HEAD > "$ART_DIR/DONE.tmp"
+mv -f -- "$ART_DIR/DONE.tmp" "$ART_DIR/DONE"
 
 cd "$ORIGIN_PATH"
 git worktree remove --force "$WORKTREE_PATH" || true
@@ -598,6 +712,28 @@ nohup bash -c '
   done
 ' _ "$SESSION" >/dev/null 2>&1 &
 disown
+
+# Emit a manifest on stdout so Step 7 (watcher) and Step 8 (user report) — which
+# run in SEPARATE Bash tool calls that do NOT inherit these variables — can
+# recover the values. Also write a file copy inside the worktree so an operator
+# who loses the tool output can still reconstruct the session state later.
+# %q shell-escapes each value so the manifest is safely sourceable even when
+# paths contain spaces or shell metacharacters (matches the post.sh header
+# pattern above).
+ORIGIN_GIT_DIR=$(git -C "$ORIGIN_PATH" rev-parse --path-format=absolute --git-common-dir)
+MANIFEST="$WORKTREE_PATH/.committee-loop-manifest.txt"
+{
+  printf 'SESSION=%q\n' "$SESSION"
+  printf 'WORKTREE_PATH=%q\n' "$WORKTREE_PATH"
+  printf 'BRANCH=%q\n' "$BRANCH"
+  printf 'ORIGIN_PATH=%q\n' "$ORIGIN_PATH"
+  printf 'ORIGIN_REF=%q\n' "$ORIGIN_REF"
+  printf 'ORIGIN_GIT_DIR=%q\n' "$ORIGIN_GIT_DIR"
+  printf 'WATCHER_SCRIPT=%q\n' "$WATCHER_SCRIPT"
+} > "$MANIFEST"
+# Print to stdout separately (non-pipeline) so a `tee` failure under pipefail
+# can't orphan the live tmux session + watchdog launched above.
+cat "$MANIFEST"
 ```
 
 Notes:
@@ -608,11 +744,13 @@ Notes:
 
 The detached session writes a terminal sentinel (`<ORIGIN_GIT_DIR>/committee-loop/<SESSION>/DONE` on clean, `.committee-loop-BLOCKED.txt` or `.committee-loop-EXHAUSTED.txt` in the worktree on the other paths). The watcher script generated in step 5 polls for those files, exits with a one-line classification when any appears, and the harness surfaces that exit to the invoker session as a background-task-completion notification — that notification IS the callback.
 
-Invoke the watcher via a SEPARATE Bash tool call with `run_in_background: true`:
+Read `SESSION`, `WORKTREE_PATH`, `BRANCH`, and `ORIGIN_GIT_DIR` from the manifest emitted at the end of Step 6 (either the stdout of that Bash call or `$WORKTREE_PATH/.committee-loop-manifest.txt`). The block's shell variables are NOT inherited by later Bash tool calls, so the manifest is the only persistent source.
+
+Invoke the watcher via a SEPARATE Bash tool call with `run_in_background: true`. Quote the substituted path so repos with spaces in their directory names don't split the command:
 
 ```
 Bash({
-  command: "bash <WORKTREE_PATH>/.committee-loop-watcher.sh",
+  command: "bash \"<WORKTREE_PATH>/.committee-loop-watcher.sh\"",
   description: "Committee-loop status watcher",
   run_in_background: true
 })
@@ -621,7 +759,7 @@ Bash({
 The call returns a shell ID. Save it. Include it in the user report so the user can kill the watcher (e.g. if they cancel the loop manually). Do NOT synchronously block on the shell — the whole point is that the invoker is free to continue other work until the harness delivers the completion notification.
 
 When the watcher completes, its stdout will be one of:
-- `DONE:<sha>` — loop finished clean; commit `<sha>` on origin `main`.
+- `DONE:<sha>` — loop finished clean; commit `<sha>` on origin's branch at spawn time (ORIGIN_REF in the manifest; typically `main` but post.sh refuses to copy back if that branch moved).
 - `CONVERGED:<sha>` — finished, but converged to avoid oscillation (see decisions.md in the artifact dir).
 - `BLOCKED:<reason>` — origin target changed during review or similar safety block; worktree preserved.
 - `EXHAUSTED` — ralph ran out of iterations without emitting the promise; worktree preserved.
@@ -647,8 +785,8 @@ Cancel:   tmux kill-session -t <SESSION> && git worktree remove --force <WORKTRE
 Outcomes (artifacts land under <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/ — per-session so runs don't collide):
 - REVIEW CLEAN                 -> post-script copies back, commits, writes <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/DONE, tears down.
 - REVIEW CLEAN + CONVERGED.txt -> same as CLEAN, but the sidecar names an oscillating finding; check decisions.md in the same artifact dir.
-- .committee-loop-BLOCKED.txt   -> origin target changed/became-a-symlink during review, or a multi-target run blocked after writing some targets.
-                                   Any vetted writes ARE committed to origin (marked "(PARTIAL)"); worktree preserved at <WORKTREE_PATH> for inspection.
+- .committee-loop-BLOCKED.txt   -> origin target changed/became-a-symlink during review, a multi-target run blocked after writing some targets, or origin's branch moved during the detached run.
+                                   Any vetted writes ARE committed to origin (marked "(PARTIAL)" for mid-loop blocks or "(BRANCH MOVED — ...)" for post-copy branch drift); worktree preserved at <WORKTREE_PATH> for inspection.
                                    After resolving, run the Cancel command above to tear down.
 - .committee-loop-EXHAUSTED.txt -> ran out of ralph iterations without emitting the promise; no copy-back, worktree preserved at <WORKTREE_PATH>.
                                    Watcher emits EXHAUSTED and exits; inspect and run the Cancel command above to tear down, or stale tmux sessions accumulate.
