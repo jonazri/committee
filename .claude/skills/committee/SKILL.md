@@ -16,7 +16,7 @@ The committee report is advisory. After presenting it, WAIT. Do NOT say "let me 
 - About to re-resolve scope in the coordinator → STOP, the skill is the source of truth
 - About to sanitize adversarial user input → STOP, reject with a message instead
 - About to splice a user path/keyword directly into bash → STOP, use file-first via the Write tool
-- About to skip the trust dialog → STOP, it gates reviewer shell access
+- About to skip the trust dialog without `--trust` flag → STOP, it gates reviewer shell access
 </red_flags>
 
 ## Input parsing
@@ -34,7 +34,11 @@ Parse the user's argument (if any) into one of these scopes:
 | freeform text | vague | keyword written to a file via Write tool |
 | no args | auto | — |
 
-**Optional cross-scope flag:** `--reviewer-model=<model>` (one of `opus`, `sonnet`, `haiku`) overrides the Claude reviewer's model. Parse it out of the args, pass it through to the Claude reviewer Agent dispatch below, and do NOT include it in the `prepare.sh` invocation. Defaults to the harness's default model if absent. Used by `committee-loop` in iter-3+ to trade Opus depth for Sonnet speed once most Critical/Important findings have surfaced.
+**Optional cross-scope flags:**
+
+- `--reviewer-model=<model>` (one of `opus`, `sonnet`, `haiku`) overrides the Claude reviewer's model. Parse it out of the args, pass it through to the Claude reviewer Agent dispatch below, and do NOT include it in the `prepare.sh` invocation. Defaults to the harness's default model if absent. Used by `committee-loop` in iter-3+ to trade Opus depth for Sonnet speed once most Critical/Important findings have surfaced.
+
+- `--trust=<level>` (one of `read-only`, `nah`, `full-access`) pre-selects the trust level for CLI reviewers, skipping the interactive trust dialog below. Used by `committee-loop` to avoid blocking on the dialog in unattended `--dangerously-skip-permissions` sessions. If `--trust=nah`, still verify `command -v nah` and fall back to `read-only` if absent. Do NOT include in the `prepare.sh` invocation.
 
 <validation>
 Validate ALL user-supplied structured values BEFORE invoking `prepare.sh`:
@@ -93,7 +97,9 @@ A single commit is ~5–8 min; a large sha_range is ~8–10 min.
 
 ## Trust level dialog
 
-Call the `AskUserQuestion` tool with:
+If `--trust=<level>` was parsed above, use that value directly (after nah verification if applicable) and skip the interactive dialog.
+
+Otherwise, call the `AskUserQuestion` tool with:
 - **Question:** `What access level should CLI reviewers (Kiro, Gemini) have?`
 - **Header:** `Trust level`
 - **Option 1** — `Read-only (Recommended)` — `Reviewers read the precomputed diff file only. No shell access. Safe for untrusted code.`

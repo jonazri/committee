@@ -58,7 +58,7 @@ c. `timeout 900 codex exec --skip-git-repo-check --sandbox read-only -c model_re
 
 Do NOT use `/committee` in iter-1 — its coordinator includes Gemini and its own synthesis. Synthesize the three reports into a single Critical/Important/Minor list yourself.
 
-**Iter-2+ — full mode.** Use `/committee --files <TARGET...>` (all 4 reviewers including Gemini). In multi-target runs, pass every `TARGET_FILES` entry as separate space-separated arguments after `--files`. Gemini's perspective joins once the file is already cleaner from iter-1 fixes, reducing noise.
+**Iter-2+ — full mode.** Use `/committee --files <TARGET...> --trust=full-access` (all 4 reviewers including Gemini). In multi-target runs, pass every `TARGET_FILES` entry as separate space-separated arguments after `--files`. Gemini's perspective joins once the file is already cleaner from iter-1 fixes, reducing noise. The `--trust=full-access` flag is required in unattended sessions to skip the interactive trust dialog.
 
 <target_segmentation>
 Before dispatching `/committee` in iter-N (N≥2), filter `TARGET_FILES` to only those changed since the iter-(N−1) commit:
@@ -67,7 +67,7 @@ Before dispatching `/committee` in iter-N (N≥2), filter `TARGET_FILES` to only
 git diff HEAD~1 --name-only -- <TARGET_FILES> 2>/dev/null
 ```
 
-Pass ONLY the changed subset to `/committee --files`. Unchanged targets were already reviewed at this baseline in iter-(N−1) — re-reviewing them is pure waste. Ledger per-file convergence is tracked implicitly: a file that stops changing stops being reviewed.
+Pass ONLY the changed subset to `/committee --files ... --trust=full-access`. Unchanged targets were already reviewed at this baseline in iter-(N−1) — re-reviewing them is pure waste. Ledger per-file convergence is tracked implicitly: a file that stops changing stops being reviewed.
 
 If the filter yields ZERO files (nothing changed since iter-(N−1)), that IS the `clean` convergence trigger — go directly to step 6 convergence check without dispatching `/committee`.
 </target_segmentation>
@@ -76,7 +76,7 @@ If the filter yields ZERO files (nothing changed since iter-(N−1)), that IS th
 Starting in iter-3, pass `--reviewer-model=sonnet` to `/committee` to select Sonnet for the Claude reviewer:
 
 ```
-/committee --files <changed-target-list> --reviewer-model=sonnet
+/committee --files <changed-target-list> --reviewer-model=sonnet --trust=full-access
 ```
 
 Rationale: iter-1 and iter-2 use Opus because the ledger architecture is still forming and the broadest-possible review is worth the wall-time. By iter-3, the Critical/Important findings that are easy to surface have been surfaced; remaining issues are subtler but still within Sonnet's range. Sonnet returns reviews in ~3 min vs Opus's ~8 min. The quorum gate tolerates any per-reviewer miss. If review quality visibly degrades (sudden spike in iter-3+ rejected findings or re-flagged issues), revert this flag.
@@ -159,7 +159,7 @@ If only the current iteration had zero applies but iter-(N−1) had ≥1, run th
 </skip_check>
 
 1. Run `simplify` on the target with `model: "sonnet"` (same workflow as iter-1's simplify). Apply non-contentious fixes, commit as `simplify final: <summary>`. If nothing, no commit.
-2. Run a full committee pass (`/committee --files <TARGET...> --reviewer-model=sonnet` — all 4 reviewers including Gemini, Claude reviewer at Sonnet) using the section-3 and section-4 workflow (verifier dispatch, three gates, sequential apply). Commit applied fixes as `fix final: ...`. In multi-target runs, apply target segmentation here too — only pass files that changed since the last iteration's commit.
+2. Run a full committee pass (`/committee --files <TARGET...> --reviewer-model=sonnet --trust=full-access` — all 4 reviewers including Gemini, Claude reviewer at Sonnet) using the section-3 and section-4 workflow (verifier dispatch, three gates, sequential apply). Commit applied fixes as `fix final: ...`. In multi-target runs, apply target segmentation here too — only pass files that changed since the last iteration's commit.
 3. Run `bash .committee-loop-post.sh`.
 4. Create `.committee-loop-FINAL-PASS-DONE` (empty marker) AFTER post.sh returns. The flag only matters on the BLOCKED path where post.sh preserves the worktree and ralph-loop may re-feed the prompt; the flag suppresses redundant re-entry. On CLEAN, post.sh tears down the worktree + tmux session itself and the flag is moot. AFTER is the safe ordering: a crash between post.sh and flag-creation re-runs the final pass with consistent already-committed-or-BLOCKED state; the inverse ordering would let a crash between flag-creation and post.sh skip copy-back entirely.
 5. If `.committee-loop-BLOCKED.txt` now exists → STOP, do NOT emit the promise. Otherwise emit `<promise>REVIEW CLEAN</promise>`.
