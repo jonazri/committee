@@ -47,28 +47,13 @@ Committee also requires the [superpowers](https://github.com/anthropics/claude-p
 
 ## Installation
 
-Clone this repo into your project (or any directory where you want the skill available):
-
 ```bash
-git clone https://github.com/jonazri/committee.git
-cd committee
+git clone https://github.com/jonazri/committee.git && cd committee && ./install.sh
 ```
 
-The skill is at `.claude/skills/committee/SKILL.md` — Claude Code discovers it automatically when you open this directory.
+`install.sh` symlinks the `committee` and `committee-loop` skills into `~/.claude/skills/`, so `/committee` and `/committee-loop` are available in every Claude Code session. Re-running is safe; uninstall with `rm -rf ~/.claude/skills/committee ~/.claude/skills/committee-loop`.
 
-### Installing into an existing project
-
-Copy the skill and prompts into your project:
-
-```bash
-# From your project root:
-mkdir -p .claude/skills/committee
-cp /path/to/committee/.claude/skills/committee/SKILL.md .claude/skills/committee/
-cp -r /path/to/committee/prompts .
-
-# Add to .gitignore
-echo ".committee/" >> .gitignore
-```
+Keep the cloned repo around — the skills are symlinked into it. To update, `git pull` in the clone; no reinstall needed.
 
 ## Usage
 
@@ -84,6 +69,13 @@ echo ".committee/" >> .gitignore
 /committee --plan docs/plan.md          # Review an implementation plan
 /committee --plan plan.md --spec spec.md # Review plan against a spec
 ```
+
+Optional cross-scope flags (combine with any scope above):
+
+| Flag | Effect |
+|------|--------|
+| `--trust=auto` / `--trust=read-only` | Pre-selects CLI reviewer trust level, skipping the interactive dialog (used by `/committee-loop` for unattended runs). |
+| `--reviewer-model=opus\|sonnet\|haiku` | Overrides the Claude reviewer's model. Inherits the harness default. `/committee-loop` uses `sonnet` from iter-3 on for faster iterations (~3 min vs ~8 min). |
 
 ### File Review (`--files`)
 
@@ -102,17 +94,16 @@ Reviews an implementation plan for completeness, feasibility, task decomposition
 
 Before each run, Committee presents a trust dialog:
 
-- **Read-only** (default) — Reviewers read a precomputed diff file. No shell access. Safe for untrusted code.
-- **Sandboxed (nah)** — Reviewers have shell access guarded by [nah](https://github.com/manuelschipper/nah), a context-aware safety hook that classifies commands and blocks dangerous operations. Requires `pip install nah && nah install`.
-- **Full access** — Reviewers can explore the repo autonomously (`git log`, `grep`, `blame`). Richer reviews but exposes the host to prompt injection from diff content.
+- **Auto Mode** (default) — CLI reviewers (Kiro, Gemini) run with their own auto-approval flags so they can explore the repo (`git log`, `grep`, `blame`); the Claude reviewer inherits the parent session's auto-mode classifier. The parent classifier does NOT gate commands inside Kiro/Gemini subprocesses — diff-borne prompt injection can execute there.
+- **Read-only** — Reviewers read a precomputed diff file. No shell access. Safer for untrusted code.
 
 ## Committee Loop
 
 Companion skill `/committee-loop` (v1.0) runs iterative review-and-refine cycles. Where `/committee` produces a single report for you to act on, `/committee-loop` spawns a detached Claude Code session in an isolated git worktree that:
 
 1. Runs a `simplify` pre-pass to catch obvious code-quality issues
-2. **Iteration 1 — fast mode:** dispatches only Claude + Kiro reviewers (skipping the slowest reviewers) for quick resolution of easy findings
-3. **Iteration 2+ — full mode:** uses `/committee` (all 4 reviewers) for thorough verification
+2. **Iteration 1 — fast mode:** dispatches Claude + Kiro + Codex in parallel (skipping Gemini); Codex runs at `high` reasoning effort (~3–5 min)
+3. **Iteration 2+ — full mode:** uses `/committee` (all 4 reviewers, including Gemini) for thorough verification
 4. Per reviewer, dispatches a parallel verifier subagent that runs concrete bash probes to confirm each claim before any fix is applied
 5. Applies only Critical+Important findings that pass a quorum gate (≥2 reviewers OR single reviewer + passing verification probe); rejects unverifiable claims; defers minors to a sidecar
 6. Maintains a persistent `.committee-loop-decisions.md` ledger with verification commands and rationale for every decision — prevents thrashing because prior rejections can't be re-opened without new evidence
@@ -227,19 +218,21 @@ Key design decisions:
 | SHA range | ~8–10 min |
 | PR | ~8–10 min |
 
-Codex (GPT-5.4, xhigh reasoning) is the bottleneck at ~5–10 min. The other three reviewers typically finish in 1–3 min. The minimum quorum is 2 of 4 reviewers — if Codex times out, the review proceeds with the other three.
+Codex (GPT-5.4) is the bottleneck. The coordinator overrides to `model_reasoning_effort=high` (from the user's `xhigh` default), typically completing in ~3–5 min. Timeout is 8 min (10 min for `--plan` scope). The other three reviewers typically finish in 1–3 min. The minimum quorum is 2 of 4 reviewers — if Codex times out, the review proceeds with the other three.
 
 ## Security Considerations
 
-- **Read-only mode** (default): Kiro uses `--trust-tools=fs_read` (no shell). Gemini receives diff via stdin (no tool access). Safe for reviewing untrusted code.
-- **Full-access mode**: Kiro uses `--trust-all-tools`, Gemini uses `-y`. A malicious diff could trigger arbitrary command execution via prompt injection. Use only for reviewing your own code.
-- **Gemini `@` tokens**: Gemini CLI processes `@path` in stdin, attempting file reads. Blocked in read-only mode; succeeds in full-access mode.
+- **Auto Mode** (default): Kiro uses `--trust-all-tools`, Gemini uses `-y`. A malicious diff could trigger arbitrary command execution via prompt injection at the reviewer-CLI layer. The parent session's auto-mode classifier does not gate subprocess internals. Use only for reviewing your own code.
+- **Read-only mode**: Kiro uses `--trust-tools=fs_read` (no shell). Gemini receives diff via stdin (no tool access). Safer for reviewing untrusted code.
+- **Gemini `@` tokens**: Gemini CLI processes `@path` in stdin, attempting file reads. Blocked in read-only mode; succeeds in auto mode.
 - **Branch name injection**: The skill instructs the executing LLM to quote all branch names in bash commands. Defense-in-depth for crafted branch names.
 
 ## File Structure
 
 ```
-.claude/skills/committee/SKILL.md   # Skill entry point
+.claude/skills/
+  committee/SKILL.md                 # /committee skill entry point
+  committee-loop/                    # /committee-loop skill (SKILL.md + spawn.sh + inner-agent.md + body scripts)
 prompts/
   coordinator.md                     # Coordinator orchestration prompt
   verifier.md                        # Per-reviewer verifier prompt

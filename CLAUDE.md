@@ -6,7 +6,7 @@ Multi-perspective code review agent for Claude Code.
 
 Two Claude Code skills:
 - `/committee` — one-shot parallel code review from four AI reviewers (Claude, Codex, Kiro, Gemini), verifies claims, synthesizes a structured report.
-- `/committee-loop` (v1.0) — companion skill that spawns a detached session in an isolated worktree to iteratively review-and-refine a target file until clean. Phase-based reviewer dispatch (fast iter-1 with Claude+Kiro; full iter-2+ with all 4), simplify pre-pass, parallel verifier subagents, persistent decision ledger to prevent thrashing. Dogfooded on itself through 6 rounds of self-review.
+- `/committee-loop` (v1.0) — spawns a detached session in an isolated worktree to iteratively review-and-refine a target file until clean. Iter-1 runs fast (Claude+Kiro+Codex, no Gemini); iter-2+ uses `/committee` (all 4). Includes a simplify pre-pass, parallel verifier subagents, and a persistent decision ledger to prevent thrashing.
 
 ## Prerequisites
 
@@ -32,6 +32,13 @@ All four reviewer CLIs must be installed and authenticated:
 /committee --plan docs/plan.md          # Review an implementation plan
 ```
 
+Optional cross-scope flags (combine with any scope above):
+
+```
+--trust=auto | --trust=read-only        # Pre-select CLI reviewer trust; skips the interactive dialog
+--reviewer-model=opus|sonnet|haiku      # Override the Claude reviewer's model (default: harness default)
+```
+
 ## Project Structure
 
 - `.claude/skills/committee/SKILL.md` — The `/committee` skill entry point
@@ -55,18 +62,18 @@ Note: Claude is dispatched by the skill (top-level, has plugin access) using `su
 
 ## Known Limitations
 
-**Codex slowness** — Codex uses `gpt-5.4` with `xhigh` reasoning effort and takes ~5–10 minutes even for small diffs. The coordinator allows 10 minutes. For large diffs, Codex may still time out — the other 3 reviewers maintain quorum.
+**Codex slowness** — Codex uses `gpt-5.4`. The coordinator passes `-c model_reasoning_effort=high` on every invocation to override the user's global `xhigh` default, typically completing in ~3–5 minutes. Coordinator timeout is 8 minutes (10 for `--plan` scope, since Codex explores auxiliary code to validate feasibility). For large diffs, Codex may still time out — the other 3 reviewers maintain quorum.
 
-**Codex sha_range** — Codex has no native flag for arbitrary SHA ranges. For sha_range scope, the coordinator uses `codex exec --ephemeral -o FILE "prompt with SHA range"`, which lets Codex run `git diff` autonomously and produce a clean review via the `-o` output flag. Tested working; takes ~5-10 minutes.
+**Codex sha_range** — Codex has no native flag for arbitrary SHA ranges. For sha_range (and PR) scope, the coordinator uses `codex exec --ephemeral -o FILE - < prompt_file`, which lets Codex run `git diff` autonomously. Slower than the native `codex review` flows above because Codex has to explore the range itself — ~5–10 minutes even at `high` effort.
 
-**Shell injection + `--trust-all-tools`** — In full-access mode, Kiro runs with `--trust-all-tools` (auto-approves all bash) and Gemini runs with `-y` (yolo mode). A diff containing adversarial content could trigger arbitrary command execution via prompt injection on the reviewer's LLM. In read-only mode (default), Kiro uses `--trust-tools=fs_read` (file reading only, no shell) and Gemini receives the diff via stdin without tool access. In sandboxed mode, [nah](https://github.com/manuelschipper/nah) guards execution — reviewers have shell access but nah classifies commands and blocks dangerous operations. The skill prompts users to choose the trust level before each run.
+**Shell injection + `--trust-all-tools`** — In auto mode (default), Kiro runs with `--trust-all-tools` and Gemini runs with `-y`. A diff containing adversarial content could trigger arbitrary command execution via prompt injection on the reviewer's LLM. The parent session's auto-mode classifier does NOT gate commands issued inside Kiro/Gemini subprocesses. In read-only mode, Kiro uses `--trust-tools=fs_read` (file reading only, no shell) and Gemini receives the diff via stdin without tool access. The skill presents a trust dialog before each run.
 
-**Gemini `@` token parsing** — Gemini CLI processes `@path` tokens in stdin input, attempting to read referenced files. In read-only mode (no `-y`), the file read tool call is blocked. In full-access mode (`-y`), it succeeds — a diff containing `@/etc/passwd` would cause that file to be read and sent to Google's API. This is within the accepted risk of full-access mode but means read-only mode's safety depends on Gemini's tool approval gate, not on content sanitization.
+**Gemini `@` token parsing** — Gemini CLI processes `@path` tokens in stdin input, attempting to read referenced files. In read-only mode (no `-y`), the file read tool call is blocked. In auto mode (`-y`), it succeeds — a diff containing `@/etc/passwd` would cause that file to be read and sent to Google's API. This is within the accepted risk of auto mode but means read-only mode's safety depends on Gemini's tool approval gate, not on content sanitization.
 
 **Kiro network dependency** — Kiro connects to an external AWS service (`q.us-east-1.amazonaws.com`). It will fail with a network error in offline environments or if that service is unavailable. Treat Kiro as best-effort.
 
-**Kiro `profile_name` log error** — kiro-cli logs `Failed to get auth profile: missing field profile_name` on every non-interactive call. This is an [upstream bug](https://github.com/kirodotdev/Kiro/issues/6170) caused by a camelCase/snake_case mismatch in the stored profile JSON. The error is non-fatal — kiro-cli falls back and works normally. If Kiro starts failing with actual connection errors, check `~/.aws/sso/cache/kiro-auth-token.json` for an expired token and re-login with `kiro-cli login`.
+**Kiro `profile_name` log error** — kiro-cli logs `Failed to get auth profile: missing field profile_name` on every non-interactive call ([upstream bug](https://github.com/kirodotdev/Kiro/issues/6170)). Non-fatal. If Kiro starts actually failing, re-login with `kiro-cli login`.
 
-**Background task noise** — The coordinator uses background tasks internally to run CLI reviewers in parallel. When the coordinator subagent finishes, stale task-completion notifications may surface in the parent Claude Code session. These are harmless — the coordinator already processed their results before returning.
+**Background task noise** — Stale task-completion notifications from the coordinator's parallel reviewer dispatch may surface after the coordinator returns. Harmless — its results were already processed.
 
 **Session directories** — Each run creates `.committee/session-XXXXXX/` in the project root. These are gitignored and cleaned up on completion. If a run is interrupted abnormally, orphaned session dirs may remain — safe to delete manually.
