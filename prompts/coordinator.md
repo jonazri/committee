@@ -80,10 +80,12 @@ Read the prompt template at `prompts/reviewers/gemini.md` (or `~/.claude/skills/
 
 Write the filled prompt to `{SESSION_DIR}/gemini_prompt.txt` first, then dispatch.
 
+**Do NOT pass `-m gemini-2.5-pro`** (or any other `-m` pin). The Gemini CLI's default behavior follows a model-fallback chain (pro → flash → …). Pinning `-m gemini-2.5-pro` disables that fallback, and the Code Assist backend regularly returns `429 MODEL_CAPACITY_EXHAUSTED` for `gemini-2.5-pro` even on paid plans (it's a server-side capacity flag, not the user's quota). With no pin, the CLI silently retries on the next model in the chain and the request succeeds.
+
 **If Trust level = read-only:**
 Set `{GIT_RANGE_INSTRUCTIONS}` to: "The diff is included below." Then pipe the precomputed diff as stdin — gemini reads stdin without needing tool access:
 ```bash
-cat "{SESSION_DIR}/gemini_prompt.txt" "{SESSION_DIR}/diff.txt" | gemini -m gemini-2.5-pro -p "Review the code changes provided on stdin." -e code-review -o text > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
+cat "{SESSION_DIR}/gemini_prompt.txt" "{SESSION_DIR}/diff.txt" | gemini -p "Review the code changes provided on stdin." -e code-review -o text > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
 ```
 Gemini receives the diff content directly; no `-y` flag, no tool auto-approval.
 
@@ -91,7 +93,7 @@ Gemini receives the diff content directly; no `-y` flag, no tool auto-approval.
 Set `{GIT_RANGE_INSTRUCTIONS}` to: "Run `git diff {BASE_SHA}..{HEAD_SHA}` to see the changes."
 Pipe the prompt file via stdin with `-y` for auto-approval (avoids `$()` substitution):
 ```bash
-gemini -m gemini-2.5-pro -p "Review the code changes. Full instructions on stdin." -e code-review -y -o text < "{SESSION_DIR}/gemini_prompt.txt" > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
+gemini -p "Review the code changes. Full instructions on stdin." -e code-review -y -o text < "{SESSION_DIR}/gemini_prompt.txt" > "{SESSION_DIR}/gemini.md" 2>"{SESSION_DIR}/gemini.err"
 ```
 Gemini reads its full prompt from stdin. Can read files and execute commands with auto-approval. The parent Claude Code session's auto-mode classifier does NOT intercept commands Gemini runs internally — diff-borne prompt injection can still execute here.
 
