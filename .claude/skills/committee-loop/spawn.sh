@@ -137,6 +137,23 @@ for required in inner-agent.md post-body.sh watcher-body.sh health-check-body.sh
     || { echo "committee-loop skill corrupt: $SCRIPT_DIR/$required missing" >&2; exit 1; }
 done
 
+# ---- Dedicated tmux socket (isolation + crash avoidance) ----
+# All committee-loop tmux traffic runs on its OWN tmux server (-L), never the
+# user's default server. Two reasons:
+#   1. Sizing: on the shared default server, a detached session's window is
+#      recalculated to match other attached clients and renders too narrow for
+#      Claude's TUI. On a private socket with no other clients, the -x/-y passed
+#      to new-session is honored as-is.
+#   2. Safety: tmux 3.4 segfaults in clients_calculate_size if window-size is
+#      ever set to `manual` (the tempting "fix" for #1) — killing EVERY session
+#      on that server. Isolation removes any need to touch window-size, and means
+#      a committee crash can never take down the user's interactive sessions.
+# The wrapper keeps every `tmux ...` call below on this socket without per-call
+# edits. The generated watcher/post/health-check scripts get the same wrapper via
+# their headers; the detached watchdog (separate process) sets it inline.
+COMMITTEE_SOCKET="committee-loop"
+tmux() { command tmux -L "$COMMITTEE_SOCKET" "$@"; }
+
 # ---- Create the worktree ----
 
 PROJECT=$(basename -- "$ORIGIN_PATH")
@@ -207,6 +224,8 @@ ORIGIN_REF=$(git -C "$ORIGIN_PATH" rev-parse --abbrev-ref HEAD)
   printf 'WORKTREE_PATH=%q\n' "$WORKTREE_PATH"
   printf 'BRANCH=%q\n' "$BRANCH"
   printf 'SESSION=%q\n' "$SESSION"
+  printf 'COMMITTEE_SOCKET=%q\n' "$COMMITTEE_SOCKET"
+  printf 'tmux() { command tmux -L "$COMMITTEE_SOCKET" "$@"; }\n'
   printf 'ORIGIN_REF=%q\n' "$ORIGIN_REF"
   printf 'TARGET_FILES=('
   printf ' %q' "${TARGET_FILES[@]}"
@@ -229,6 +248,8 @@ ART_DIR="$ORIGIN_GIT_DIR/committee-loop/$SESSION"
   printf 'SESSION=%q\n' "$SESSION"
   printf 'WORKTREE_PATH=%q\n' "$WORKTREE_PATH"
   printf 'ART_DIR=%q\n' "$ART_DIR"
+  printf 'COMMITTEE_SOCKET=%q\n' "$COMMITTEE_SOCKET"
+  printf 'tmux() { command tmux -L "$COMMITTEE_SOCKET" "$@"; }\n'
 } > "$WATCHER_SCRIPT"
 cat "$SCRIPT_DIR/watcher-body.sh" >> "$WATCHER_SCRIPT"
 chmod +x "$WATCHER_SCRIPT"
@@ -245,6 +266,8 @@ HEALTH_CHECK_SCRIPT="$WORKTREE_PATH/.committee-loop-health-check.sh"
   printf 'SESSION=%q\n' "$SESSION"
   printf 'WORKTREE_PATH=%q\n' "$WORKTREE_PATH"
   printf 'ART_DIR=%q\n' "$ART_DIR"
+  printf 'COMMITTEE_SOCKET=%q\n' "$COMMITTEE_SOCKET"
+  printf 'tmux() { command tmux -L "$COMMITTEE_SOCKET" "$@"; }\n'
 } > "$HEALTH_CHECK_SCRIPT"
 cat "$SCRIPT_DIR/health-check-body.sh" >> "$HEALTH_CHECK_SCRIPT"
 chmod +x "$HEALTH_CHECK_SCRIPT"
@@ -267,9 +290,10 @@ printf '\n%s\n' "$RALPH_INVOCATION" >> "$PROMPT_FILE"
 
 # ---- Spawn the detached tmux session ----
 
-# -x/-y are required: a detached tmux session with no client attached defaults
-# to a terminal size too small for Claude's TUI (the pane stays blank, readiness
-# never triggers).
+# -x/-y set the detached session's window size. Because all committee tmux
+# traffic runs on a private socket (COMMITTEE_SOCKET above) with no other clients
+# attached, these dimensions are honored as-is — no `window-size manual` needed
+# (that option crashes tmux 3.4 in clients_calculate_size and kills the server).
 # --effort high balances loop-agent discipline (ledger + verification steps)
 # against total wall-time. `max` rarely pays off for single-file reviews.
 tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$WORKTREE_PATH" \
@@ -342,6 +366,7 @@ done
 # assumption together when upgrading claude-code.
 # 12h cap guards against a leaked watchdog; exits when tmux session dies.
 nohup bash -c '
+  SOCK="$2"; tmux() { command tmux -L "$SOCK" "$@"; }
   end=$(( $(date +%s) + 43200 ))
   while [ "$(date +%s)" -lt "$end" ] && tmux has-session -t "$1" 2>/dev/null; do
     if tmux capture-pane -t "$1" -p 2>/dev/null | grep -qF "Yes, and allow Claude to edit its own settings"; then
@@ -354,7 +379,7 @@ nohup bash -c '
     fi
     sleep 3
   done
-' _ "$SESSION" >/dev/null 2>&1 &
+' _ "$SESSION" "$COMMITTEE_SOCKET" >/dev/null 2>&1 &
 disown
 
 # ---- Emit manifest on stdout + copy to worktree for later recovery ----

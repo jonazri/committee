@@ -132,9 +132,10 @@ Committee loop spawned.
 
 I'll send you a progress update in 4.5 minutes and again whenever the loop finishes (within ~15s of terminal state).
 
-Monitor:  tmux attach -t <SESSION>      (Ctrl-b d to detach)
-Peek:     tmux capture-pane -t <SESSION> -p | tail -40
-Cancel:   tmux kill-session -t <SESSION> && git worktree remove --force <WORKTREE_PATH> && git branch -D <BRANCH>
+(committee-loop runs on a private tmux socket for isolation — note the `-L committee-loop`.)
+Monitor:  tmux -L committee-loop attach -t <SESSION>      (Ctrl-b d to detach)
+Peek:     tmux -L committee-loop capture-pane -t <SESSION> -p | tail -40
+Cancel:   tmux -L committee-loop kill-session -t <SESSION> && git worktree remove --force <WORKTREE_PATH> && git branch -D <BRANCH>
 
 Outcomes (artifacts land under <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/):
 - REVIEW CLEAN                 -> post.sh copies back, commits, writes DONE, tears down.
