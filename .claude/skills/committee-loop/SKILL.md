@@ -117,6 +117,25 @@ Each call returns a shell ID — save both and include in the user report so the
 
 On receiving either notification in a future turn, map the line to a user-facing message and report.
 
+### 2b. Keep-alive — detect and recover auto-continue stalls
+
+The 4.5m health check and the terminal watcher are NOT sufficient on their own. The detached ralph loop is supposed to auto-send "continue" to start each next iteration, but on some hosts this **stalls at iteration boundaries**: the word `continue` is typed into the inner prompt and Enter is never submitted, so the inner agent sits idle (an observed stall sat ~3 hours). Between the health check and the terminal signal, **poll and re-nudge**:
+
+- **Cadence:** poll the pane roughly every ~4.5 min (270s — keeps the prompt cache warm) until the watcher fires a terminal outcome. Use the harness's own scheduling (e.g. `ScheduleWakeup`) rather than blocking `sleep`s.
+- **Peek:** `tmux -L committee-loop capture-pane -t <SESSION> -p | tail -45`.
+- **STALLED** = an idle prompt — `❯ continue`, or an empty `❯ ` with a `← for agents` / `new task? /clear` hint — and **no active spinner**. Corroborate with no recent worktree file activity: `find <WORKTREE_PATH> -type f -not -path '*/.git/*' -newermt '-6 minutes'` returns nothing.
+- **RUNNING** = an active spinner line (`…· esc to interrupt`). Iterations legitimately take ~20–25 min (reviewers + verifiers), so a static tail *with* a spinner is normal — judge by spinner + fs activity, not "looks stuck."
+- **Recover** (a bare `Enter`/`C-m` does NOT submit — the line must be cleared and retyped):
+  ```bash
+  tmux -L committee-loop send-keys -t <SESSION> C-u
+  sleep 1; tmux -L committee-loop send-keys -t <SESSION> -l "continue"
+  sleep 1; tmux -L committee-loop send-keys -t <SESSION> Enter
+  ```
+  Wait ~10s, re-peek, and confirm a spinner appeared.
+- **Exception — the final `Run post.sh?` prompt is a SELECTION MENU, not a text prompt.** There a single `Enter` (selects the highlighted "Yes, run post.sh") is correct — do NOT clear/retype, and do NOT auto-advance it if the user asked to decide on teardown.
+
+Treat committee-loop on a large target as **attended**, not fire-and-forget: expect to nudge at most iteration boundaries.
+
 ### 3. Report to user
 
 Use the manifest values to fill in `<placeholders>`:
@@ -130,7 +149,7 @@ Committee loop spawned.
 - Watcher:       background shell <WATCHER_SHELL_ID> (fires on terminal state, polls every 15s)
 - Health check:  background shell <HEALTH_SHELL_ID> (fires once at T+4.5m with a progress snapshot)
 
-I'll send you a progress update in 4.5 minutes and again whenever the loop finishes (within ~15s of terminal state).
+I'll check in roughly every 4.5 minutes (recovering the loop if its auto-continue stalls — see §2b) and report again whenever the loop finishes (within ~15s of terminal state).
 
 (committee-loop runs on a private tmux socket for isolation — note the `-L committee-loop`.)
 Monitor:  tmux -L committee-loop attach -t <SESSION>      (Ctrl-b d to detach)
@@ -144,6 +163,17 @@ Outcomes (artifacts land under <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/):
                                    Vetted writes ARE committed (marked "(PARTIAL)" or "(BRANCH MOVED)") EXCEPT when the block reason is an index conflict (pre-existing OR concurrent unrelated staged changes): those runs leave reviewed bytes in origin's working tree UNCOMMITTED and the user must resolve the conflicting index state before staging/committing manually. Worktree preserved for inspection either way.
 - .committee-loop-EXHAUSTED.txt -> ran out of ralph iterations without emitting the promise; no copy-back, worktree preserved.
 ```
+
+### 4. After a clean terminal outcome (plan/spec/design targets): finalize for execution — do this automatically
+
+When the watcher reports `DONE:<sha>` or `CONVERGED:<sha>`, post.sh has already copied the reviewed target back to the origin branch. If the target was an **implementation plan / spec / design doc**, run the two follow-ups below **automatically — do NOT wait for the user to ask for them** (they are the standard post-loop finishing steps). Skip them for arbitrary code-diff reviews; for those, step 3's report ends the workflow.
+
+**4a. Triage and apply the worthwhile deferred findings.** Read the committee's deferred ledger at `<ORIGIN_GIT_DIR>/committee-loop/<SESSION>/deferred.md`. Triage every item and **implement the ones that are genuine correctness, robustness, or plan-completeness gaps** — e.g. a prose-only test step that violates the plan's own no-placeholder/TDD standard, brittle parsing, a missing preflight/guard, a hollow test that doesn't exercise the property it claims. **Skip** cosmetic / non-defect items (line-ref drift of 1–3 lines, verified-correct hardcoded paths, items the loop already fixed mid-run). Apply the worthwhile ones to the copied-back target on the origin branch and commit (one focused commit, scoped to the target file). Then give the user a short triage: what you applied, and what you left as notes and why. (Use judgment on which to apply — this replaces the user having to ask "any findings from deferred.md worth implementing?")
+
+**4b. Make the plan ready to execute in a fresh session.** Edit the plan so it can be handed cold to a new session and run end-to-end:
+- **Verification gates:** weave `superpowers:verification-before-completion` checkpoints in at each key checkpoint (e.g. every phase boundary / before each human-gated deploy) AND a final verification at the very end — evidence-before-assertions, run the named commands and confirm output before claiming any phase green.
+- **Execution preamble:** open the plan with a short guide for subagent-driven execution — the driver skill (`superpowers:subagent-driven-development`), task/phase ordering, the build/test/deploy commands and runtimes, and links to the context the executor will need (the design/spec doc, the repo's CLAUDE.md gotchas, the deferred ledger).
+Commit. The goal: the user can point a fresh session at the plan and it runs with verification gates, without re-explaining any of this. (This replaces the user having to ask for verification gates + an execution preamble each time.)
 
 ## How the pieces fit
 

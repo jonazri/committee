@@ -104,6 +104,7 @@ git diff --staged # staged
 **DON'T:**
 - Say "looks good" without checking
 - Mark nitpicks as Critical
+- Raise a third-party SDK/API-surface claim (call signature, accepted argument/content shape, response accessor, "this option/format is rejected") as Critical from memory — verify against the pinned version's installed types/docs first, or downgrade to a note; these are a frequent false-Critical source
 - Give feedback on code you didn't review
 - Be vague ("improve error handling")
 - Avoid giving a clear verdict

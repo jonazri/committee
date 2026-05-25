@@ -16,3 +16,5 @@ Review the code changes in this git repository.
 - **Safe commands:** `git log`, `git diff`, `git show`, `git blame`, `grep`, `cat`, `wc`, `ls`, `find` are all fine.
 
 Give a thorough code review. Focus on whatever you think is most important — bugs, security, design, testing, performance, maintainability. Be specific with file and line references.
+
+**One caution:** before flagging a third-party SDK/API-surface detail (a call signature, accepted argument/content shape, response accessor, or "this format/option is rejected") as a bug, verify it against the actually-pinned version (installed types / current docs) — these are a frequent source of confident-but-wrong findings. If you cannot verify it, say so rather than rating it Critical.

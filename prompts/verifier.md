@@ -32,6 +32,7 @@ Git range: `{BASE_SHA}..{HEAD_SHA}` (if available — use to read code and run v
    - **Read code** for assertions about what code does or doesn't do
    - **Run tests** if a reviewer questions test correctness or coverage
    - **Skip** subjective opinions, style preferences, vague suggestions — tag as Unverifiable
+   - **Third-party SDK/API-surface claims** (a library's call signature, accepted argument/content shapes, response accessors, "this option/format is rejected", etc.) are a recurring source of *false* Criticals — reviewers assert them from stale training data. Do NOT confirm them from reasoning. Verify against the **pinned version's** real surface: read the installed types under `node_modules/<pkg>` (or the lockfile-pinned version's docs / Context7). If you cannot verify it that way, tag it **Unverifiable** (never Confirmed), note that it rests on an unverified external-API assumption, and do not let it stand as Critical.
 4. Tag each claim: **Confirmed** / **Refuted** / **Unverifiable**
 
 ## Output Format

@@ -54,6 +54,16 @@ Optional cross-scope flags (combine with any scope above):
 
 Note: Claude is dispatched by the skill (top-level, has plugin access) using `superpowers:code-reviewer` directly — not by the coordinator. The coordinator only handles Codex, Kiro, and Gemini. `prompts/reviewers/claude.md` is a fallback for when the plugin is unavailable. Codex uses `codex review` (branch/commit/uncommitted) or `codex exec` (sha_range). Only Kiro and Gemini need prompt templates because they're invoked via freeform CLI.
 
+## Developing & deploying changes
+
+`install.sh` installs both skills into `~/.claude/skills/` as **symlinks** — it `mkdir`s the real `committee/` and `committee-loop/` dirs, then symlinks `SKILL.md` and `prompts/` into this repo (`safe_symlink`, via `ln -sfn`). Consequences:
+
+- **Edits to source are live** — `~/.claude/skills/committee/SKILL.md`, `~/.claude/skills/committee/prompts/` (→ repo `prompts/`), and `~/.claude/skills/committee-loop/SKILL.md` all point back at this repo. The committee-loop helper scripts (`spawn.sh`, `watcher-body.sh`, `health-check-body.sh`, `inner-agent.md`, `post-body.sh`) are NOT symlinked individually — they're resolved at runtime via `readlink -f` on the `SKILL.md` symlink, so editing them in the repo is immediately live too. **No copy step is needed.**
+- **To take effect:** skills load at session start, so **start a fresh Claude Code session** after editing (a session already running keeps the old prompts/SKILL.md in context).
+- **First install / repair:** run `./install.sh` from the repo root — idempotent (`ln -sfn`; it also replaces a stale real-dir target left by older `cp -r`-based installs). Verify with `ls -l ~/.claude/skills/committee ~/.claude/skills/committee-loop` — `SKILL.md` and `prompts` should be symlinks pointing into this repo.
+- **Where what lives:** `/committee` reviewer/verifier/coordinator prompts → `prompts/` (deployed to `~/.claude/skills/committee/prompts/`); `/committee-loop` workflow + helper scripts → `.claude/skills/committee-loop/` (deployed to `~/.claude/skills/committee-loop/`).
+- **Uninstall:** `rm -rf ~/.claude/skills/committee ~/.claude/skills/committee-loop`.
+
 ## Architectural Notes
 
 **Claude parallelism** — Claude is dispatched by the skill in the background while the coordinator simultaneously starts the CLI reviewers. The coordinator polls for `claude.md` before verification. All 4 reviewers run in parallel.
