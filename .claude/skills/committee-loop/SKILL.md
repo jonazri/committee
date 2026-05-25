@@ -23,7 +23,7 @@ Do NOT use when: the target needs human judgment on each finding (use `/committe
 - About to run `/ralph-loop:ralph-loop` in the current session → spawn detached via `spawn.sh` instead
 - About to edit any bash inline in SKILL.md or reproduce spawn logic by hand → call `spawn.sh`
 - About to synchronously block on the tmux session, watcher, or health check → all run in background; the harness delivers each exit as a notification
-- About to tell the user "fire-and-forget" or exit without installing BOTH the watcher and the health check → this skill actively monitors; both shells must be launched before reporting
+- About to tell the user "fire-and-forget", or to exit without (a) launching the watcher + health-check shells AND (b) starting the recurring ~4.5m keep-alive loop (§2b) → this skill ACTIVELY monitors; a stall must be caught within ~4.5 min, not hours
 - The argument contains no concrete file path → ask the user which file to review before spawning
 </red_flags>
 
@@ -96,6 +96,8 @@ Bash({
 
 Each call returns a shell ID — save both and include in the user report so the user can kill them if they cancel manually. Do NOT synchronously block on either shell; the harness delivers each exit as a notification.
 
+**Then start the recurring 4.5m keep-alive loop — this is DEFAULT, not optional.** The event-driven watcher only fires at the *terminal* state and the health check fires *once* at T+4.5m; neither catches a mid-run auto-continue stall, so a stalled loop could otherwise burn hours unnoticed. So in addition to the two shells: schedule a self-wakeup ~4.5 min out via `ScheduleWakeup` (~270s — keeps the prompt cache warm). On each wakeup, run the §2b check — view the pane, resolve a stall if present — and then, **unless the watcher has already reported a terminal outcome, schedule the next wakeup ~4.5 min from then**; repeat until terminal. This guarantees a stall is caught within ~4.5 min, not hours.
+
 **Health check outcomes (fires at T+4.5m, single notification):**
 
 <health_check_outcomes>
@@ -164,16 +166,17 @@ Outcomes (artifacts land under <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/):
 - .committee-loop-EXHAUSTED.txt -> ran out of ralph iterations without emitting the promise; no copy-back, worktree preserved.
 ```
 
-### 4. After a clean terminal outcome (plan/spec/design targets): finalize for execution — do this automatically
+### 4. After a clean terminal outcome (plan/spec/design targets): offer to finalize for execution
 
-When the watcher reports `DONE:<sha>` or `CONVERGED:<sha>`, post.sh has already copied the reviewed target back to the origin branch. If the target was an **implementation plan / spec / design doc**, run the two follow-ups below **automatically — do NOT wait for the user to ask for them** (they are the standard post-loop finishing steps). Skip them for arbitrary code-diff reviews; for those, step 3's report ends the workflow.
+When the watcher reports `DONE:<sha>` or `CONVERGED:<sha>`, post.sh has already copied the reviewed target back to the origin branch. If the target was an **implementation plan / spec / design doc**, **proactively offer the two standard finishing steps below and run them on a yes.** This saves the user from typing the requests each time while keeping a confirmation gate — do NOT edit the plan before they approve. Skip step 4 entirely for arbitrary code-diff reviews; for those, step 3's report ends the workflow.
 
-**4a. Triage and apply the worthwhile deferred findings.** Read the committee's deferred ledger at `<ORIGIN_GIT_DIR>/committee-loop/<SESSION>/deferred.md`. Triage every item and **implement the ones that are genuine correctness, robustness, or plan-completeness gaps** — e.g. a prose-only test step that violates the plan's own no-placeholder/TDD standard, brittle parsing, a missing preflight/guard, a hollow test that doesn't exercise the property it claims. **Skip** cosmetic / non-defect items (line-ref drift of 1–3 lines, verified-correct hardcoded paths, items the loop already fixed mid-run). Apply the worthwhile ones to the copied-back target on the origin branch and commit (one focused commit, scoped to the target file). Then give the user a short triage: what you applied, and what you left as notes and why. (Use judgment on which to apply — this replaces the user having to ask "any findings from deferred.md worth implementing?")
+**Present a recommendation, then ask one yes/no.** Read the committee's deferred ledger at `<ORIGIN_GIT_DIR>/committee-loop/<SESSION>/deferred.md` and triage it. Show the user a short summary: which deferred findings are worth implementing — genuine correctness / robustness / plan-completeness gaps (e.g. a prose-only test step that violates the plan's own no-placeholder/TDD standard, brittle parsing, a missing preflight/guard, a hollow test that doesn't exercise the property it claims) — vs. which to leave as notes (line-ref drift of 1–3 lines, verified-correct hardcoded paths, items the loop already fixed mid-run); plus your intent to add verification gates + an execution preamble. Then ask a single yes/no, e.g. *"Apply these N deferred fixes and make the plan fresh-session-ready?"* **Wait for the answer.**
 
-**4b. Make the plan ready to execute in a fresh session.** Edit the plan so it can be handed cold to a new session and run end-to-end:
-- **Verification gates:** weave `superpowers:verification-before-completion` checkpoints in at each key checkpoint (e.g. every phase boundary / before each human-gated deploy) AND a final verification at the very end — evidence-before-assertions, run the named commands and confirm output before claiming any phase green.
-- **Execution preamble:** open the plan with a short guide for subagent-driven execution — the driver skill (`superpowers:subagent-driven-development`), task/phase ordering, the build/test/deploy commands and runtimes, and links to the context the executor will need (the design/spec doc, the repo's CLAUDE.md gotchas, the deferred ledger).
-Commit. The goal: the user can point a fresh session at the plan and it runs with verification gates, without re-explaining any of this. (This replaces the user having to ask for verification gates + an execution preamble each time.)
+On **yes**, do both, commit (one focused commit each, scoped to the target file), and report what changed:
+- **4a — apply the agreed deferred findings** to the copied-back target on the origin branch.
+- **4b — make the plan fresh-session-ready:** weave `superpowers:verification-before-completion` checkpoints in at each key checkpoint (every phase boundary / before each human-gated deploy) AND a final verification at the end (evidence-before-assertions — run the named commands and confirm output before claiming any phase green); and open the plan with a subagent-driven **execution preamble** — driver skill (`superpowers:subagent-driven-development`), task/phase ordering, build/test/deploy commands + runtimes, and links to the context the executor needs (the design/spec doc, the repo's CLAUDE.md gotchas, the deferred ledger).
+
+On **no** (or a partial selection), do only what the user approved — or nothing — and leave the committed-back plan as-is.
 
 ## How the pieces fit
 
