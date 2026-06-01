@@ -12,6 +12,8 @@ You are the coordinator for a multi-perspective code review. You handle the exte
 
 Read `Session dir` from REVIEW_CONTEXT — `SESSION_DIR` is the project-relative session directory the skill created (e.g. `.committee/session-XXXXXX`). All review files live here.
 
+Read `Prompts dir` from REVIEW_CONTEXT — `PROMPTS_DIR` is committee's install-resolved prompts directory. Load EVERY template below (kiro, gemini, verifier) from `$PROMPTS_DIR/...` — do NOT read a `prompts/...` path relative to the repo under review, which could shadow committee's templates with a like-named file in the reviewed project.
+
 Claude's review is being written to `{SESSION_DIR}/claude.md` by the background subagent. You will poll for it after dispatching the CLI reviewers.
 
 ## Phase 1: Dispatch CLI Reviewers
@@ -24,20 +26,22 @@ Note: Claude is running in the background simultaneously — do not wait for it 
 
 Dispatch via Bash tool with an **8-minute (480000ms) timeout** (use **10-minute / 600000ms for plan scope** — Codex explores auxiliary code to validate feasibility). Every codex invocation below passes `-c model_reasoning_effort=high` to override the user's global `xhigh` default — high still produces strong findings and typically completes in ~3–5 minutes instead of 5–10. Pipe output to temp file:
 
+> **IMPORTANT — `codex review` writes its review to STDERR, not stdout.** In codex-cli 0.114.0 the `codex review` subcommand streams its *entire* output — banner, exec traces, AND the final review verdict — to stderr; stdout stays empty (there is no `-o` flag for `codex review`). So a bare `> codex.md` captures **nothing** and the review lands in `codex.err`. Every `codex review` command below therefore appends a **recovery step** in the SAME Bash call (it reads `$?`): on a clean exit, if `codex.md` is empty but `codex.err` is non-empty, promote the stderr log to `codex.md` so the verifier reads it. It prefers stdout when present (so a future codex that populates stdout keeps working) and only promotes on `rc -eq 0` — a **non-zero** exit means `codex.err` is an error message, not a review, so codex is a genuine failure. `codex.md` then holds codex's session log with the review at the end; the verifier extracts findings from it normally. The `codex exec` form (sha_range / pr) writes directly to its `-o` file and needs no recovery.
+
 For branch diff:
 ```bash
-codex review -c model_reasoning_effort=high --base {BASE_BRANCH} > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"
+codex review -c model_reasoning_effort=high --base {BASE_BRANCH} > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"; cx=$?; [ "$cx" = 0 ] && [ ! -s "{SESSION_DIR}/codex.md" ] && [ -s "{SESSION_DIR}/codex.err" ] && cp "{SESSION_DIR}/codex.err" "{SESSION_DIR}/codex.md"; echo "codex_exit=$cx bytes=$(wc -c <"{SESSION_DIR}/codex.md")"
 ```
 
 For single commit:
 ```bash
-codex review -c model_reasoning_effort=high --commit {COMMIT_SHA} > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"
+codex review -c model_reasoning_effort=high --commit {COMMIT_SHA} > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"; cx=$?; [ "$cx" = 0 ] && [ ! -s "{SESSION_DIR}/codex.md" ] && [ -s "{SESSION_DIR}/codex.err" ] && cp "{SESSION_DIR}/codex.err" "{SESSION_DIR}/codex.md"; echo "codex_exit=$cx bytes=$(wc -c <"{SESSION_DIR}/codex.md")"
 ```
 Note: `{COMMIT_SHA}` = the `Commit SHA` field from REVIEW_CONTEXT (same as Head SHA for commit scope).
 
 For uncommitted changes:
 ```bash
-codex review -c model_reasoning_effort=high --uncommitted > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"
+codex review -c model_reasoning_effort=high --uncommitted > "{SESSION_DIR}/codex.md" 2>"{SESSION_DIR}/codex.err"; cx=$?; [ "$cx" = 0 ] && [ ! -s "{SESSION_DIR}/codex.md" ] && [ -s "{SESSION_DIR}/codex.err" ] && cp "{SESSION_DIR}/codex.err" "{SESSION_DIR}/codex.md"; echo "codex_exit=$cx bytes=$(wc -c <"{SESSION_DIR}/codex.md")"
 ```
 
 For sha_range or pr: `codex review` has no SHA range flag, but `codex exec` can run git commands autonomously. Write the review prompt to `{SESSION_DIR}/codex_prompt.txt` using the Write tool, then pass via stdin (avoids `$()` substitution and inline multiline prompts):
@@ -48,7 +52,7 @@ The prompt file should contain: "Review the git changes between commit {BASE_SHA
 
 ### Reviewer 2: Kiro
 
-Read the prompt template at `prompts/reviewers/kiro.md` (or `~/.claude/skills/committee/prompts/reviewers/kiro.md` if not found). Fill in the placeholders:
+Read the prompt template at `{PROMPTS_DIR}/reviewers/kiro.md` (the `Prompts dir` from REVIEW_CONTEXT). Fill in the placeholders:
 - `{SCOPE_DESCRIPTION}` — describe the changes
 - `{GIT_RANGE_INSTRUCTIONS}` — depends on trust level (see below)
 - `{ADDITIONAL_CONTEXT}` — build up from these triggers (combine with newlines, leave blank if none fire):
@@ -76,7 +80,7 @@ Kiro reads its instructions from the file. Can read files and execute shell comm
 
 ### Reviewer 3: Gemini
 
-Read the prompt template at `prompts/reviewers/gemini.md` (or `~/.claude/skills/committee/prompts/reviewers/gemini.md` if not found). Fill in the placeholders (same as Kiro, including `{FOCUS_AREAS}`).
+Read the prompt template at `{PROMPTS_DIR}/reviewers/gemini.md` (the `Prompts dir` from REVIEW_CONTEXT). Fill in the placeholders (same as Kiro, including `{FOCUS_AREAS}`).
 
 Write the filled prompt to `{SESSION_DIR}/gemini_prompt.txt` first, then dispatch.
 
@@ -179,7 +183,7 @@ wc -c "{SESSION_DIR}/claude.md" "{SESSION_DIR}/codex.md" "{SESSION_DIR}/kiro.md"
 - Non-zero exit code → failure. Record: "<Reviewer>: exited with code N"
 - Timeout (Bash tool returns timeout error) → failure. Record the actual timeout: "<Reviewer>: timed out after N minutes" (Codex: 10 min, Kiro: 5 min, Gemini: 5 min)
 - Missing output file → failure. Record: "<Reviewer>: no output file produced"
-- Output file exists but ≤200 bytes → likely tool initialization issue, not a real review. Check the `.err` file for clues. Record: "<Reviewer>: output too small (N bytes), likely tool/mode issue"
+- Output file exists but ≤200 bytes → likely tool initialization issue, not a real review. Check the `.err` file for clues. Record: "<Reviewer>: output too small (N bytes), likely tool/mode issue". **Codex note:** the dispatch step already promotes `codex.err`→`codex.md` when `codex review` wrote its review to stderr (the normal case), so a `codex.md` that is *still* empty/tiny here means codex genuinely failed (non-zero exit or an error in `codex.err`) — record it as a real failure, not a recoverable one.
 - Missing after polling → failure as recorded above
 
 **Check quorum:** If fewer than 2 reviewers succeeded, STOP:
@@ -201,13 +205,20 @@ git update-ref -d {PR_CLEANUP_REF} 2>/dev/null || true
 ```
 (Include the `git update-ref` line only if `PR cleanup ref` is present in REVIEW_CONTEXT.)
 
-**If quorum met:** Dispatch one verifier per reviewer in parallel — single message, multiple Agent tool calls. Each verifier reads its own review file directly; the coordinator never reads review content.
+**If quorum met:** dispatch one verifier per succeeded reviewer. Each verifier reads its own review file directly; the coordinator never reads review content.
 
-**Model selection:** Each verifier Agent call MUST pass `model: "sonnet"`. Verifiers do narrow claim-probing work (read a claim, run a verification command, tag Confirmed/Refuted/Unverifiable) — Opus is overkill for this and ~2–3× slower. Sonnet produces equivalent tags at faster wall-time and lower cost. If a verifier task errors with a model-not-allowed message, fall back to the default model.
+**Dispatch mechanism — use `claude -p`, NOT the Agent tool.** You are running as a subagent, so the Agent/Task tool is unavailable to you (you cannot spawn nested subagents). Spawn each verifier as a `claude -p` CLI subprocess instead. For each reviewer:
+1. Write the filled verifier prompt to `{SESSION_DIR}/verifier_<reviewer>_prompt.txt` with the Write tool (the prompt may embed the reviewer's findings — keep it in a file, never inline it into the command).
+2. Launch concurrently in the background, capturing the verifier's stdout (its structured claim list) to a file:
+   ```bash
+   claude -p "$(cat {SESSION_DIR}/verifier_<reviewer>_prompt.txt)" --model sonnet > "{SESSION_DIR}/verified_<reviewer>.md" 2>/dev/null &
+   ```
+   `--model sonnet` keeps verifiers fast — they do narrow claim-probing (read a claim, run a check, tag Confirmed/Refuted/Unverifiable); Opus is ~2–3× slower for equal quality. If `claude` rejects `--model sonnet`, re-run that verifier without the flag.
+3. After launching all of them, poll until every `verified_<reviewer>.md` is non-empty before reading (20×30s loop, **600000ms Bash timeout** — the default 120s is too short). `"$(cat …)"` is a safe single-argument substitution (the content is not re-parsed by the shell); still, never pass review/diff content as a bare unquoted `$(…)`.
 
-**Error recovery:** If any verifier Agent call fails (timeout, error, etc.), note it in the synthesis but proceed with the others. If all verifiers fail, produce a partial report listing which reviewers completed and their file paths so the user can read them manually. Never let a verifier failure prevent synthesis.
+**Error recovery:** If any verifier subprocess fails (non-zero exit, empty output, timeout), note it in the synthesis but proceed with the others. If all verifiers fail, produce a partial report listing which reviewers completed and their file paths so the user can read them manually. Never let a verifier failure prevent synthesis.
 
-Read the verifier prompt template at `prompts/verifier.md` (or `~/.claude/skills/committee/prompts/verifier.md` if not found). For each reviewer that succeeded, fill in and dispatch a separate Agent call (remember `model: "sonnet"`):
+Read the verifier prompt template at `{PROMPTS_DIR}/verifier.md` (the `Prompts dir` from REVIEW_CONTEXT). For each reviewer that succeeded, fill in and dispatch a separate verifier (remember `sonnet` — see the dispatch-mechanism note below):
 - `{REVIEWER_NAME}` — "Claude", "Codex", "Kiro", or "Gemini"
 - `{REVIEW_FILE_PATH}` — path to the review file (e.g. `.committee/session-XXXXXX/claude.md`)
 - `{SESSION_DIR}` — the session directory path (contains diff.txt, diff_stat.txt)
@@ -216,7 +227,7 @@ Read the verifier prompt template at `prompts/verifier.md` (or `~/.claude/skills
 
 For reviewers that failed, skip dispatching a verifier — record the failure in the synthesis header instead.
 
-Dispatch all verifiers in a single message. Wait for all to return. If any individual verifier Agent call errors, note it in the report but proceed with the others.
+Launch all verifier subprocesses (background `&`), then poll for their `verified_<reviewer>.md` outputs as described above. If any individual verifier errors or produces no output, note it in the report but proceed with the others.
 
 ## Phase 3: Synthesize
 
