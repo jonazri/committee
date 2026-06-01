@@ -2,6 +2,10 @@
 
 You are reviewing code changes for production readiness.
 
+## Review Lens
+
+{REVIEW_LENS}
+
 **Your task:**
 1. Review {WHAT_WAS_IMPLEMENTED}
 2. Compare against {PLAN_OR_REQUIREMENTS}
@@ -39,7 +43,7 @@ git diff          # unstaged
 git diff --staged # staged
 ```
 
-> Note: This template is a fallback used when `superpowers:code-reviewer` is unavailable. It produces Strengths/Issues/Assessment format. The coordinator's synthesis template uses Critical/Important/Minor format — the verifier handles normalization between the two.
+> Note: This is committee's bundled Claude-reviewer template. The skill fills these placeholders and dispatches it to a `general-purpose` agent (committee owns this prompt rather than depending on any plugin-provided `code-reviewer` agent type, which is not guaranteed to exist). It produces Strengths/Issues/Assessment format; the coordinator's synthesis template uses Critical/Important/Minor — the verifier handles normalization between the two.
 
 ## Review Checklist
 

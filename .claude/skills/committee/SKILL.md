@@ -124,26 +124,33 @@ Do not dispatch Claude or the coordinator — dispatching Claude first would orp
 
 ### Claude reviewer (background)
 
-Dispatch via `Agent` with `subagent_type: "superpowers:code-reviewer"` and `run_in_background: true`. If `--reviewer-model=<model>` was parsed at the top, also pass `model: "<model>"` on this Agent call; otherwise omit `model` (harness default). Fill the template's parameters from the manifest:
-- `WHAT_WAS_IMPLEMENTED` — SCOPE_DESCRIPTION
-- `PLAN_OR_REQUIREMENTS` — SPEC_PATH if set, else "General code review — no specific plan"
-- `BASE_SHA` / `HEAD_SHA` — from manifest (omit for uncommitted / files / plan)
-- `DESCRIPTION` — SCOPE_DESCRIPTION
+Dispatch via `Agent` with `subagent_type: "general-purpose"` and `run_in_background: true`. If `--reviewer-model=<model>` was parsed at the top, also pass `model: "<model>"` on this Agent call; otherwise omit `model` (harness default).
 
-Always append: `"Write your complete review to <SESSION_DIR>/claude.md using the Write tool before returning."`
+Build the prompt from committee's bundled reviewer template at `$PROJECT_ROOT/prompts/reviewers/claude.md` (project install) or `~/.claude/skills/committee/prompts/reviewers/claude.md` (user install): read it, substitute every placeholder, and pass the filled text as the Agent prompt. Committee owns this prompt rather than dispatching a plugin-provided `code-reviewer` agent type — superpowers 5.1.0 ships no agents, and an absent `subagent_type` is an unrecoverable dispatch error, not something the harness falls back from. Substitute from the manifest:
+- `{WHAT_WAS_IMPLEMENTED}` — SCOPE_DESCRIPTION (see per-scope overrides below)
+- `{DESCRIPTION}` — SCOPE_DESCRIPTION
+- `{PLAN_OR_REQUIREMENTS}` (appears twice — substitute every occurrence) — SPEC_PATH if set, else "General code review — no specific plan"
+- `{BASE_SHA}` / `{HEAD_SHA}` — from manifest (use `none` for uncommitted / files / plan)
+- `{COMMIT_SHA}` — from manifest for commit scope; for every other scope substitute `N/A` so no literal `{COMMIT_SHA}` survives into the prompt
+- `{REVIEW_LENS}` — the scope-appropriate lens from the table below (this is how the one template adapts per review type; you may augment the lens text for the specific change under review)
+
+Always append: `"Write your complete review to <SESSION_DIR>/claude.md using the Write tool before returning."` Without this directive the coordinator's poll for claude.md times out.
 
 Also append (conditionally): if `<SESSION_DIR>/static.txt` exists and is non-empty, add: `"Also read <SESSION_DIR>/static.txt — it contains advisory static-analysis findings (shellcheck / ruff / yamllint / JSON syntax) from the skill's pre-pass. Verify each finding applies to the actual changed code before flagging; some may be false positives or out of scope."`
 
-**Per-scope prompt extras:**
+**Per-scope template fill** (`{REVIEW_LENS}`, `{WHAT_WAS_IMPLEMENTED}`, and any extra directive to append):
 
-| Scope | WHAT_WAS_IMPLEMENTED | Extra directive to append |
-|---|---|---|
-| uncommitted | describe uncommitted changes | — |
-| files | `Source files for review: <list>` | `Files at <SESSION_DIR>/diff.txt, each preceded by === FILE: <path> === headers. Read that file.` |
-| plan | `Implementation plan: <plan path>` | `Plan at <SESSION_DIR>/diff.txt. Read it and evaluate whether an implementing agent could follow it without ambiguity.` |
+| Scope | `{REVIEW_LENS}` | `{WHAT_WAS_IMPLEMENTED}` | Extra directive to append |
+|---|---|---|---|
+| branch_diff / commit / sha_range / uncommitted | `Standard code review of the changes in the git range above.` | SCOPE_DESCRIPTION | — |
+| files | `Standard code review of the source files below (this is a set of files, not a diff).` | `Source files for review: <list>` | `Files at <SESSION_DIR>/diff.txt, each preceded by === FILE: <path> === headers. Read that file.` |
+| pr | `Pull-request review. Treat the changes as one cohesive unit and assess whether they fully and safely accomplish the PR's stated purpose; flag anything that should block merge. Findings are independently re-verified downstream, so report genuine concerns rather than self-suppressing borderline ones.` | SCOPE_DESCRIPTION | — |
+| plan | `Implementation-plan review. The content below is a plan document, not code. Evaluate whether an implementing agent could follow it without ambiguity — missing steps, undefined terms, unstated assumptions, ordering hazards, verification gaps. Severity reflects how badly each gap would derail implementation.` | `Implementation plan: <plan path>` | `Plan at <SESSION_DIR>/diff.txt. Read it and evaluate whether an implementing agent could follow it without ambiguity.` |
+
+(`auto` is resolved by `prepare.sh` to one of branch_diff / commit / uncommitted before the manifest is emitted, so it never reaches dispatch as `auto` — it uses the standard code-review lens.)
 
 <fallback>
-If the `superpowers:code-reviewer` dispatch fails, fall back to `general-purpose` with the template at `$SKILL_DIR/../../../prompts/reviewers/claude.md` (project install) or `~/.claude/skills/committee/prompts/reviewers/claude.md` (user install). Fill `{WHAT_WAS_IMPLEMENTED}`, `{PLAN_OR_REQUIREMENTS}` (appears twice — substitute every occurrence), `{DESCRIPTION}`, `{BASE_SHA}`, `{HEAD_SHA}`, `{COMMIT_SHA}`. For non-commit scopes `COMMIT_SHA` is empty — substitute `N/A` so no literal `{COMMIT_SHA}` survives into the prompt. Also append the same diff.txt-read override for files / plan scope, and the Write-to-claude.md directive. Without the directive the coordinator's poll for claude.md times out.
+The Claude reviewer is one of four; quorum is the safety net. If the `general-purpose` dispatch itself errors (an actual tool/dispatch failure, not a review finding), do NOT block the run: record "Claude reviewer unavailable" and let the coordinator synthesize from the remaining reviewers — the quorum gate still applies, so note degraded quorum if fewer than 2 returned. If the bundled template file cannot be read at either path, dispatch with an inline equivalent (reviewer persona + the filled parameters above + Critical/Important/Minor output format + the Write-to-claude.md directive) rather than aborting.
 </fallback>
 
 ### Coordinator (foreground)
@@ -187,7 +194,7 @@ Any `prepare.sh` or pre-dispatch bash failure: print the error output to the use
 </failure_mode>
 
 <failure_mode name="claude_dispatch_failed">
-Background `superpowers:code-reviewer` dispatch returned an error → follow the `<fallback>` path above (general-purpose agent with the fallback template).
+Background `general-purpose` Claude-reviewer dispatch returned an error → follow the `<fallback>` path above (proceed on quorum from the remaining reviewers; if the failure was an unreadable template file, re-dispatch with the inline equivalent prompt).
 </failure_mode>
 
 <failure_mode name="coordinator_failed">

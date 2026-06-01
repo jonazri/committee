@@ -12,7 +12,7 @@ Committee dispatches four reviewers in parallel:
 
 | Reviewer | Model | Mechanism |
 |----------|-------|-----------|
-| **Claude** | Claude (via superpowers plugin) | Agent subagent |
+| **Claude** | Claude (harness default; `--reviewer-model` to override) | `general-purpose` Agent subagent + bundled prompt template |
 | **Codex** | GPT-5.4 | `codex review` / `codex exec` |
 | **Kiro** | Amazon Q | `kiro-cli chat` |
 | **Gemini** | Gemini | `gemini` CLI with code-review extension |
@@ -43,7 +43,7 @@ gemini extensions install https://github.com/gemini-cli-extensions/code-review
 # Claude — already running if you're in Claude Code
 ```
 
-Committee also requires the [superpowers](https://github.com/anthropics/claude-plugins-official) plugin for Claude Code (provides the `code-reviewer` agent type).
+The Claude reviewer runs as the built-in `general-purpose` agent using committee's bundled prompt template (`prompts/reviewers/claude.md`) — no extra plugin is needed for it. Committee still uses the [superpowers](https://github.com/anthropics/claude-plugins-official) plugin for its *skills* (`receiving-code-review` for findings verification; `/committee-loop` also uses `subagent-driven-development` and `verification-before-completion`), so keep superpowers installed. Note: superpowers 5.1.0 no longer ships a `code-reviewer` agent type — committee does not depend on one.
 
 ## Installation
 
@@ -193,7 +193,7 @@ Committee produces a structured markdown report:
 ```
 User session
   └── /committee (skill — scope, diff, trust dialog, Claude dispatch)
-        ├── Claude code-reviewer (background, via superpowers plugin)
+        ├── Claude reviewer (background, general-purpose agent + bundled template)
         └── Coordinator subagent
               ├── Codex review via Bash (parallel)
               ├── Kiro review via Bash (parallel)
@@ -204,7 +204,7 @@ User session
 ```
 
 Key design decisions:
-- **Claude dispatched by skill layer** (not coordinator) — plugin agent types require top-level session access
+- **Claude dispatched by skill layer** (not coordinator) — the skill owns scope/diff/trust-dialog state and launches the Claude reviewer (a `general-purpose` agent + bundled template) in the background, concurrent with the coordinator
 - **Per-reviewer verifiers** (not one shared verifier) — smaller context per verifier, parallel execution, better failure isolation
 - **Precomputed diffs** — reviewers read from file instead of running `git diff`, eliminating the need for shell access in read-only mode
 - **Coordinator never reads review content** — passes file paths to verifiers, which read directly. Keeps coordinator context lean.
@@ -237,7 +237,7 @@ prompts/
   coordinator.md                     # Coordinator orchestration prompt
   verifier.md                        # Per-reviewer verifier prompt
   reviewers/
-    claude.md                        # Claude fallback prompt
+    claude.md                        # Claude reviewer prompt template (filled per-scope, dispatched to general-purpose agent)
     kiro.md                          # Kiro review prompt template
     gemini.md                        # Gemini review prompt template
 CLAUDE.md                            # Project conventions

@@ -45,14 +45,14 @@ Optional cross-scope flags (combine with any scope above):
 - `.claude/skills/committee-loop/SKILL.md` — The `/committee-loop` companion skill (v1.0)
 - `prompts/coordinator.md` — Coordinator subagent prompt template
 - `prompts/verifier.md` — Verifier subagent prompt template
-- `prompts/reviewers/claude.md` — Claude review prompt (embedded directly; plugin subagent types unavailable in nested subagent context)
+- `prompts/reviewers/claude.md` — Claude reviewer prompt template; the skill fills it (including a per-scope `{REVIEW_LENS}`) and dispatches it to a built-in `general-purpose` agent
 - `prompts/reviewers/kiro.md` — Kiro review prompt (Kiro uses freeform chat, needs context)
 - `prompts/reviewers/gemini.md` — Gemini review prompt (Gemini uses freeform chat, needs context)
 - `.committee/` — Session directories created at runtime (gitignored); each run creates `.committee/session-XXXXXX/`
 - `docs/superpowers/specs/` — Design spec
 - `docs/superpowers/plans/` — Implementation plan
 
-Note: Claude is dispatched by the skill (top-level, has plugin access) using `superpowers:code-reviewer` directly — not by the coordinator. The coordinator only handles Codex, Kiro, and Gemini. `prompts/reviewers/claude.md` is a fallback for when the plugin is unavailable. Codex uses `codex review` (branch/commit/uncommitted) or `codex exec` (sha_range). Only Kiro and Gemini need prompt templates because they're invoked via freeform CLI.
+Note: Claude is dispatched by the skill (top-level) as a built-in `general-purpose` agent filled with `prompts/reviewers/claude.md` — not by the coordinator. Committee does NOT use a plugin `code-reviewer` agent type: superpowers 5.1.0 ships no agents, and an absent `subagent_type` is an unrecoverable dispatch error (this is what broke the old `superpowers:code-reviewer` path). Committee still depends on superpowers *skills* — `receiving-code-review` for findings verification — just not on any agent type. The skill picks a per-scope `{REVIEW_LENS}` (code / PR / plan) so the single template adapts to the review type. The coordinator only handles Codex, Kiro, and Gemini. Codex uses `codex review` (branch/commit/uncommitted) or `codex exec` (sha_range). Only Kiro and Gemini need separate prompt templates because they're invoked via freeform CLI.
 
 ## Developing & deploying changes
 

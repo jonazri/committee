@@ -1,5 +1,7 @@
 # Committee: Multi-Perspective Code Review Agent
 
+> **Superseded (2026-06-01):** The Claude reviewer is no longer dispatched via the `superpowers:code-reviewer` subagent type. Superpowers 5.1.0 ships no agents, so that path errors out unrecoverably; the Claude reviewer now runs as the built-in `general-purpose` agent filled with `prompts/reviewers/claude.md` (per-scope `{REVIEW_LENS}`). Superpowers is still used for its *skills* (e.g. `receiving-code-review`), not for an agent type. The `superpowers:code-reviewer` references below — including the "as-built" notes — are historical; see CLAUDE.md for current behavior.
+
 ## Overview
 
 Committee is a Claude Code skill (`/committee`) that orchestrates parallel code reviews from four independent AI reviewers, verifies claims made by the reviewers, and synthesizes the results into a single structured report.

@@ -1,5 +1,7 @@
 # Committee Implementation Plan
 
+> **Superseded (2026-06-01):** The `subagent_type: "superpowers:code-reviewer"` dispatch described below is obsolete — superpowers 5.1.0 ships no agents, so that path errors out unrecoverably. The Claude reviewer now runs as the built-in `general-purpose` agent filled with `prompts/reviewers/claude.md`. Do NOT re-execute the `superpowers:code-reviewer` instructions in this completed plan; see CLAUDE.md for current behavior.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a Claude Code skill (`/committee`) that orchestrates parallel code reviews from Claude, Codex, Kiro, and Gemini, verifies reviewer claims, and synthesizes a structured report.
