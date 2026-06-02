@@ -8,19 +8,18 @@ Multi-perspective code review agent for [Claude Code](https://docs.anthropic.com
 /committee --base main
 ```
 
-Committee dispatches four reviewers in parallel:
+Committee runs four reviewers in parallel inside the `committee-review` workflow:
 
 | Reviewer | Model | Mechanism |
 |----------|-------|-----------|
-| **Claude** | Claude (harness default; `--reviewer-model` to override) | `general-purpose` Agent subagent + bundled prompt template |
-| **Codex** | GPT-5.4 | `codex review` / `codex exec` |
-| **Kiro** | Amazon Q | `kiro-cli chat` |
-| **Gemini** | Gemini | `gemini` CLI with code-review extension |
+| **Claude** | Claude (harness default; `--reviewer-model` to override) | workflow agent (`general-purpose`) + bundled template |
+| **Codex** | GPT-5.4 | workflow agent runs `codex review` / `codex exec` |
+| **Kiro** | Amazon Q | workflow agent runs `kiro-cli chat` |
+| **Gemini** | Gemini | workflow agent runs `gemini` CLI (code-review ext) |
 
-After all reviews return, Committee:
-1. Dispatches **per-reviewer verifiers** in parallel — each verifier checks one reviewer's claims against the actual codebase
-2. The coordinator **synthesizes** verified claims into a deduplicated report with severity ratings, contradiction detection, and a merge verdict
-3. The skill applies **receiving-code-review** evaluation before presenting — adding a layer of skepticism to the reviewers' findings
+After the reviewers return, the `committee-review` workflow runs **per-reviewer verifiers** in parallel — one agent each, checking that reviewer's claims against the actual codebase — and returns a structured `{ quorum, degraded, perReviewer }` result. Then the `/committee` skill:
+1. **Synthesizes** the verified claims into a deduplicated report with severity ratings, contradiction detection, and a merge verdict
+2. Applies **receiving-code-review** evaluation before presenting — adding a layer of skepticism to the reviewers' findings
 
 ## Prerequisites
 
@@ -51,7 +50,7 @@ The Claude reviewer runs as the built-in `general-purpose` agent using committee
 git clone https://github.com/jonazri/committee.git && cd committee && ./install.sh
 ```
 
-`install.sh` symlinks the `committee` and `committee-loop` skills into `~/.claude/skills/`, so `/committee` and `/committee-loop` are available in every Claude Code session. Re-running is safe; uninstall with `rm -rf ~/.claude/skills/committee ~/.claude/skills/committee-loop`.
+`install.sh` symlinks the `committee` and `committee-loop` skills into `~/.claude/skills/` (and the `committee-review` workflow into `~/.claude/workflows/`), so `/committee` and `/committee-loop` are available in every Claude Code session. Re-running is safe; uninstall with `rm -rf ~/.claude/skills/committee ~/.claude/skills/committee-loop ~/.claude/workflows/committee-review.js`.
 
 Keep the cloned repo around — the skills are symlinked into it. To update, `git pull` in the clone; no reinstall needed.
 
@@ -130,7 +129,7 @@ Add these to your project's `.claude/settings.local.json` for smooth operation (
 }
 ```
 
-This allows all Bash commands for this project. Committee's subagents run `git`, `codex`, `kiro-cli`, `gemini`, `sleep`, `cat`, `mktemp`, `rm`, and other standard commands. Without a broad permission, you'll get frequent approval prompts — especially from the coordinator's polling loop and CLI reviewer invocations.
+This allows all Bash commands for this project. Committee's workflow agents run `git`, `codex`, `kiro-cli`, `gemini`, `cat`, `mktemp`, `rm`, and other standard commands. Without a broad permission, you'll get frequent approval prompts — especially from the CLI reviewer invocations.
 
 If you prefer granular permissions instead of a blanket allow:
 
@@ -192,22 +191,23 @@ Committee produces a structured markdown report:
 
 ```
 User session
-  └── /committee (skill — scope, diff, trust dialog, Claude dispatch)
-        ├── Claude reviewer (background, general-purpose agent + bundled template)
-        └── Coordinator subagent
-              ├── Codex review via Bash (parallel)
-              ├── Kiro review via Bash (parallel)
-              ├── Gemini review via Bash (parallel)
-              ├── Poll for Claude's review file
-              ├── Per-reviewer verifier subagents (parallel)
-              └── Synthesis (deduplication, contradiction detection, verdict)
+  └── /committee (skill — scope, precompute diff, trust dialog, synthesis)
+        └── committee-review workflow (Workflow tool)
+              ├── Review stage (parallel):
+              │     ├── Claude  — general-purpose agent + bundled template
+              │     ├── Codex   — agent runs codex review / codex exec
+              │     ├── Kiro    — agent runs kiro-cli chat
+              │     └── Gemini  — agent runs gemini CLI
+              ├── Verify stage — one verifier agent per reviewer, streamed as each review completes
+              └── returns { quorum, degraded, perReviewer }
+                    → skill synthesizes (dedup, contradiction detection, verdict)
 ```
 
 Key design decisions:
-- **Claude dispatched by skill layer** (not coordinator) — the skill owns scope/diff/trust-dialog state and launches the Claude reviewer (a `general-purpose` agent + bundled template) in the background, concurrent with the coordinator
+- **Reviewers + verifiers run in a workflow** (not a single orchestrator subagent) — deterministic fan-out via `pipeline()`; the skill keeps scope/diff/trust prep and the final synthesis
 - **Per-reviewer verifiers** (not one shared verifier) — smaller context per verifier, parallel execution, better failure isolation
 - **Precomputed diffs** — reviewers read from file instead of running `git diff`, eliminating the need for shell access in read-only mode
-- **Coordinator never reads review content** — passes file paths to verifiers, which read directly. Keeps coordinator context lean.
+- **Structured return, not files** — the workflow returns verified claims as data (`{ quorum, degraded, perReviewer }`); the skill synthesizes from that and never parses raw review files
 
 ## Timing
 
@@ -218,7 +218,7 @@ Key design decisions:
 | SHA range | ~8–10 min |
 | PR | ~8–10 min |
 
-Codex (GPT-5.4) is the bottleneck. The coordinator overrides to `model_reasoning_effort=high` (from the user's `xhigh` default), typically completing in ~3–5 min. Timeout is 8 min (10 min for `--plan` scope). The other three reviewers typically finish in 1–3 min. The minimum quorum is 2 of 4 reviewers — if Codex times out, the review proceeds with the other three.
+Codex (GPT-5.4) is the bottleneck. The workflow's Codex reviewer overrides to `model_reasoning_effort=high` (from the user's `xhigh` default), typically completing in ~3–5 min, wrapped in a 540s `timeout` (600s for `--files`/`--plan` scope). The other three reviewers typically finish in 1–3 min. The minimum quorum is 2 of 4 reviewers — if Codex times out, the review proceeds with the other three.
 
 ## Security Considerations
 
@@ -234,7 +234,7 @@ Codex (GPT-5.4) is the bottleneck. The coordinator overrides to `model_reasoning
   committee/SKILL.md                 # /committee skill entry point
   committee-loop/                    # /committee-loop skill (SKILL.md + spawn.sh + inner-agent.md + body scripts)
 prompts/
-  coordinator.md                     # Coordinator orchestration prompt
+  committee-review.js                # review workflow (reviewers -> per-reviewer verify -> structured return)
   verifier.md                        # Per-reviewer verifier prompt
   reviewers/
     claude.md                        # Claude reviewer prompt template (filled per-scope, dispatched to general-purpose agent)
