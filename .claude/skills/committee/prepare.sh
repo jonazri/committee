@@ -467,7 +467,7 @@ MANIFEST="$SESSION_DIR/manifest.txt"
 } > "$MANIFEST"
 
 # Manifest was written successfully; disarm cleanup_on_exit so the session
-# survives for the coordinator + reviewers. Order is load-bearing — disarm
+# survives for the workflow + reviewers. Order is load-bearing — disarm
 # BEFORE `cat` so a SIGPIPE from a caller reading only the first line
 # doesn't trigger cleanup of the now-durable session.
 trap - EXIT

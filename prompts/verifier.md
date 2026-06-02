@@ -39,7 +39,7 @@ Git range: `{BASE_SHA}..{HEAD_SHA}` (if available — use to read code and run v
 
 Return only the structured claim list below. Do not add new findings. Do not produce a full review report.
 
-Include the reviewer's original severity tag on each claim so the coordinator can preserve it in synthesis.
+Include the reviewer's original severity tag on each claim so it can be preserved in synthesis.
 
 ```
 ### {REVIEWER_NAME} Claims

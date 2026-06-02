@@ -96,8 +96,8 @@ function lensFor(t) {
   return 'Standard code review of the changes in the git range.'
 }
 
-// Scope-conditional focus areas — mirrors coordinator.md's {FOCUS_AREAS} so the CLI
-// reviewers get the same coverage guidance the old coordinator filled in verbatim.
+// Scope-conditional focus areas — the per-scope review-coverage guidance the CLI
+// reviewers key on (the {FOCUS_AREAS} block from kiro.md/gemini.md, resolved per scope).
 function focusAreas(t) {
   if (t === 'plan') return 'Completeness (every step described, no TODO/figure-out-X placeholders); feasibility with the named tools/APIs; task decomposition (single-session pieces); architectural soundness + missing edge cases (error paths, concurrency, partial failure); YAGNI; actionability (no unanticipated judgment calls)'
   if (t === 'files') return 'Code quality (clarity, duplication); correctness (logic, edge cases); security (injection, unsafe patterns); API contracts vs callers; design (coupling, layering, abstraction)'
@@ -117,20 +117,20 @@ const staticNote = a.staticPath
   ? `If ${a.staticPath} exists and is non-empty, also read it — advisory static-analysis findings; verify each applies before flagging.`
   : ''
 
-// Spec/plan-requirements directive — mirrors coordinator.md's spec-read trigger for CLI reviewers.
+// Spec/plan-requirements directive — tells the CLI reviewers to read the design spec when one was given.
 const specNote = a.specPath ? `Also read ${a.specPath} for the design requirements behind these changes.` : ''
 
 // Deterministic STDERR->STDOUT promotion for `codex review`: it writes its ENTIRE
 // output (banner + verdict) to stderr with empty stdout, so on a clean exit with an
-// empty codex.md but non-empty codex.err, promote the stderr log to codex.md. Mirrors
-// the old coordinator's GUARANTEED recovery instead of relying solely on the agent's
+// empty codex.md but non-empty codex.err, promote the stderr log to codex.md. This is a
+// GUARANTEED shell-level recovery instead of relying solely on the agent's
 // prose fallback (which would otherwise have to fire on EVERY codex review run).
 // `codex exec` writes its -o file directly and needs no recovery.
 const codexRecover = `; cx=$?; [ "$cx" = 0 ] && [ ! -s ${shq(a.sessionDir)}/codex.md ] && [ -s ${shq(a.sessionDir)}/codex.err ] && cp ${shq(a.sessionDir)}/codex.err ${shq(a.sessionDir)}/codex.md`
 
 // Per-scope focus areas + false-positive caution, injected DIRECTLY into the CLI
 // reviewer's own prompt (not just the outer agent's prose) so Kiro/Gemini actually
-// receive the scope guidance the old coordinator delivered via its filled prompt file.
+// receive the per-scope guidance the kiro.md/gemini.md framing would otherwise carry.
 // Each embed site wraps this in dq(), so it stays safe inside the double-quoted CLI
 // argument even if focusAreas()/lensFor() later add a metacharacter. Carries the per-scope
 // focus areas, the reviewer-not-implementer SAFETY RULES (kiro.md/gemini.md never reach the

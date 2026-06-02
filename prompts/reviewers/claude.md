@@ -43,7 +43,7 @@ git diff          # unstaged
 git diff --staged # staged
 ```
 
-> Note: This is committee's bundled Claude-reviewer template. The skill fills these placeholders and dispatches it to a `general-purpose` agent (committee owns this prompt rather than depending on any plugin-provided `code-reviewer` agent type, which is not guaranteed to exist). It produces Strengths/Issues/Assessment format; the coordinator's synthesis template uses Critical/Important/Minor — the verifier handles normalization between the two.
+> Note: This is committee's bundled Claude-reviewer template. The skill fills these placeholders and dispatches it to a `general-purpose` agent (committee owns this prompt rather than depending on any plugin-provided `code-reviewer` agent type, which is not guaranteed to exist). It produces Strengths/Issues/Assessment format; committee's synthesis uses Critical/Important/Minor — the verifier handles normalization between the two.
 
 ## Review Checklist
 

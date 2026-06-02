@@ -56,7 +56,7 @@ b. `timeout 900 kiro-cli chat --no-interactive --trust-tools=fs_read` with the s
 
 c. `timeout 900 codex exec --skip-git-repo-check --sandbox read-only -c model_reasoning_effort=high -o .committee-loop-iter1-codex.txt "Review <TARGET...> ..."` (same prompt, explicit `high` reasoning — user's global config may default to `xhigh` which takes ~2× as long with negligible findings-quality gain for this review scale). The 15m wall-clock cap prevents a hung Codex from blocking iter-1 indefinitely; on timeout, `rm -f .committee-loop-iter1-codex.txt` before synthesis to avoid parsing a truncated report — 2-of-3 quorum from Claude+Kiro still holds.
 
-Do NOT use `/committee` in iter-1 — its coordinator includes Gemini and its own synthesis. Synthesize the three reports into a single Critical/Important/Minor list yourself.
+Do NOT use `/committee` in iter-1 — its workflow includes Gemini and its own synthesis. Synthesize the three reports into a single Critical/Important/Minor list yourself.
 
 **Iter-2+ — full mode.** Use `/committee --files <TARGET...> --trust=auto` (all 4 reviewers including Gemini). In multi-target runs, pass every `TARGET_FILES` entry as separate space-separated arguments after `--files`. Gemini's perspective joins once the file is already cleaner from iter-1 fixes, reducing noise. The `--trust=auto` flag is required in unattended sessions to skip the interactive trust dialog.
 

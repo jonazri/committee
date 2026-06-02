@@ -34,8 +34,8 @@ safe_symlink() {
 
 # /committee — skill discovery needs a real dir; SKILL.md can be a symlink
 # (SKILL.md's lookup uses readlink -f to find the real skill dir containing
-# prepare.sh). The coordinator template lookup expects prompts/ at
-# ~/.claude/skills/committee/prompts/ for user-global installs.
+# prepare.sh). The reviewer/verifier templates + committee-review workflow load from
+# prompts/ at ~/.claude/skills/committee/prompts/ for user-global installs.
 safe_symlink "$REPO_ROOT/.claude/skills/committee/SKILL.md" "$SKILLS_DIR/committee/SKILL.md"
 safe_symlink "$REPO_ROOT/prompts" "$SKILLS_DIR/committee/prompts"
 
