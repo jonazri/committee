@@ -1,6 +1,6 @@
 # Committee
 
-Multi-perspective code review agent for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Runs parallel code reviews from four AI reviewers, verifies claims, and synthesizes a single structured report.
+Multi-perspective code review agent for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Runs parallel code reviews from five AI reviewers, verifies claims, and synthesizes a single structured report.
 
 ## How It Works
 
@@ -8,14 +8,15 @@ Multi-perspective code review agent for [Claude Code](https://docs.anthropic.com
 /committee --base main
 ```
 
-Committee runs four reviewers in parallel inside the `committee-review` workflow:
+Committee runs five reviewers in parallel inside the `committee-review` workflow:
 
 | Reviewer | Model | Mechanism |
 |----------|-------|-----------|
 | **Claude** | Claude (harness default; `--reviewer-model` to override) | workflow agent (`general-purpose`) + bundled template |
 | **Codex** | GPT-5.4 | workflow agent runs `codex review` / `codex exec` |
 | **Kiro** | Amazon Q | workflow agent runs `kiro-cli chat` |
-| **Gemini** | Gemini | workflow agent runs `gemini` CLI (code-review ext) |
+| **Gemini** | Gemini (default, + flash fallback on 429) | workflow agent runs `gemini` CLI (code-review ext) |
+| **Gemini-Pro** | Gemini 3.1 Pro (preview) | workflow agent runs `gemini -m gemini-3.1-pro-preview` (no flash fallback) |
 
 After the reviewers return, the `committee-review` workflow runs **per-reviewer verifiers** in parallel — one agent each, checking that reviewer's claims against the actual codebase — and returns a structured `{ quorum, degraded, perReviewer }` result. Then the `/committee` skill:
 1. **Synthesizes** the verified claims into a deduplicated report with severity ratings, contradiction detection, and a merge verdict
@@ -23,7 +24,7 @@ After the reviewers return, the `committee-review` workflow runs **per-reviewer 
 
 ## Prerequisites
 
-Install and authenticate all four reviewer CLIs:
+Install and authenticate all four reviewer CLIs (the fifth reviewer reuses the `gemini` CLI):
 
 ```bash
 # Codex (OpenAI)
@@ -102,7 +103,7 @@ Companion skill `/committee-loop` (v1.0) runs iterative review-and-refine cycles
 
 1. Runs a `simplify` pre-pass to catch obvious code-quality issues
 2. **Iteration 1 — fast mode:** dispatches Claude + Kiro + Codex in parallel (skipping Gemini); Codex runs at `high` reasoning effort (~3–5 min)
-3. **Iteration 2+ — full mode:** uses `/committee` (all 4 reviewers, including Gemini) for thorough verification
+3. **Iteration 2+ — full mode:** uses `/committee` (all 5 reviewers, including both Gemini models) for thorough verification
 4. Per reviewer, dispatches a parallel verifier subagent that runs concrete bash probes to confirm each claim before any fix is applied
 5. Applies only Critical+Important findings that pass a quorum gate (≥2 reviewers OR single reviewer + passing verification probe); rejects unverifiable claims; defers minors to a sidecar
 6. Maintains a persistent `.committee-loop-decisions.md` ledger with verification commands and rationale for every decision — prevents thrashing because prior rejections can't be re-opened without new evidence
@@ -197,7 +198,8 @@ User session
               │     ├── Claude  — general-purpose agent + bundled template
               │     ├── Codex   — agent runs codex review / codex exec
               │     ├── Kiro    — agent runs kiro-cli chat
-              │     └── Gemini  — agent runs gemini CLI
+              │     ├── Gemini  — agent runs gemini CLI (+ flash fallback on 429)
+              │     └── Gemini-Pro — agent runs gemini -m gemini-3.1-pro-preview
               ├── Verify stage — one verifier agent per reviewer, streamed as each review completes
               └── returns { quorum, degraded, perReviewer }
                     → skill synthesizes (dedup, contradiction detection, verdict)
@@ -218,7 +220,7 @@ Key design decisions:
 | SHA range | ~8–10 min |
 | PR | ~8–10 min |
 
-Codex (GPT-5.4) is the bottleneck. The workflow's Codex reviewer overrides to `model_reasoning_effort=high` (from the user's `xhigh` default), typically completing in ~3–5 min, wrapped in a 540s `timeout` (600s for `--files`/`--plan` scope). The other three reviewers typically finish in 1–3 min. The minimum quorum is 2 of 4 reviewers — if Codex times out, the review proceeds with the other three.
+Codex (GPT-5.4) is the bottleneck. The workflow's Codex reviewer overrides to `model_reasoning_effort=high` (from the user's `xhigh` default), typically completing in ~3–5 min, wrapped in a 540s `timeout` (600s for `--files`/`--plan` scope). The other four reviewers typically finish in 1–3 min. The minimum quorum is 2 of 5 reviewers — if Codex times out, the review proceeds with the others.
 
 ## Security Considerations
 

@@ -5,7 +5,7 @@ description: Run parallel code reviews from Claude, Codex, Kiro, and Gemini, ver
 
 # Committee Code Review
 
-Run a multi-perspective code review using four AI reviewers in parallel. The skill resolves scope, precomputes the diff, and dispatches the `committee-review` workflow (which runs all four reviewers and a per-reviewer verifier for each), then evaluates and displays the synthesized report.
+Run a multi-perspective code review using five AI reviewers in parallel. The skill resolves scope, precomputes the diff, and dispatches the `committee-review` workflow (which runs all five reviewers and a per-reviewer verifier for each), then evaluates and displays the synthesized report.
 
 <no_implementation>
 The committee report is advisory. After presenting it, WAIT. Do NOT say "let me fix these," do not edit files, do not act on findings without the user's explicit go-ahead. The user drives what happens next.
@@ -104,7 +104,7 @@ Parse the manifest to pull: `SESSION_DIR`, `PROJECT_ROOT`, `SCOPE_TYPE`, `SCOPE_
 
 Before dispatching reviewers, tell the user the review has started and give a duration estimate:
 
-> Starting committee review of <SCOPE_DESCRIPTION>. Running 4 reviewers in parallel — expect 8–10 minutes for the full report. I'll display it when complete.
+> Starting committee review of <SCOPE_DESCRIPTION>. Running 5 reviewers in parallel — expect 8–10 minutes for the full report. I'll display it when complete.
 
 A single commit is ~5–8 min; a large sha_range is ~8–10 min.
 
@@ -135,7 +135,7 @@ If it is missing, abort cleanly:
 
 ### Build args and invoke the workflow
 
-The `committee-review` workflow owns all four reviewers (Claude as a built-in `general-purpose` agent filled from `$PROMPTS_DIR/reviewers/claude.md`, plus the Codex/Kiro/Gemini CLIs), runs a verifier agent per reviewer, and returns a structured result. The skill no longer dispatches Claude or any reviewer subagent itself, and it no longer fills the Claude template or picks the review lens — the workflow does that internally per `scopeType` (its `lensFor`/`focusAreas`).
+The `committee-review` workflow owns all five reviewers (Claude as a built-in `general-purpose` agent filled from `$PROMPTS_DIR/reviewers/claude.md`, the Codex/Kiro/Gemini CLIs, and a second Gemini pinned to the latest pro model `gemini-3.1-pro-preview`), runs a verifier agent per reviewer, and returns a structured result. The skill no longer dispatches Claude or any reviewer subagent itself, and it no longer fills the Claude template or picks the review lens — the workflow does that internally per `scopeType` (its `lensFor`/`focusAreas`).
 
 Invoke the `Workflow` tool with `name: "committee-review"`. **If it errors as not-found / unknown workflow** (named user-scope resolution from `~/.claude/workflows/` is environment-dependent), immediately retry with `scriptPath` set to the **resolved** `$PROMPTS_DIR` value followed by `/committee-review.js` — substitute the absolute path (e.g. `/home/<you>/.claude/skills/committee/prompts/committee-review.js`), not the literal string `$PROMPTS_DIR`. Pass `args`:
 
@@ -166,7 +166,7 @@ The `Workflow` call errored or returned no usable result → tell the user the r
 
 The workflow returns `{ quorum, degraded, perReviewer: [{reviewer, ran_ok, note?, verified:[{title,severity,verdict,evidence,file?,detail?}]}] }`. `quorum` is the count of reviewers that ran (0–4); `degraded` is `quorum < 2`. Two extra shapes occur on degraded paths: a reviewer that ran clean has `verified:[]` (still counted in quorum); a reviewer whose verifier crashed has `verified:[]` plus a non-empty `findings:[…]` and a `note`.
 
-1. If `degraded` is true (`quorum < 2`), present the degraded-quorum ABORT message — "Only N of 4 reviewers completed successfully. Minimum quorum is 2." — listing which reviewers failed (each `ran_ok:false` entry's `reviewer` + `note`), then go to **Cleanup**. No synthesis.
+1. If `degraded` is true (`quorum < 2`), present the degraded-quorum ABORT message — "Only N of 5 reviewers completed successfully. Minimum quorum is 2." — listing which reviewers failed (each `ran_ok:false` entry's `reviewer` + `note`), then go to **Cleanup**. No synthesis.
 2. Otherwise invoke `superpowers:receiving-code-review` over the confirmed findings, then synthesize the **Critical/Important/Minor** report in the existing report format: dedup the same finding raised by multiple reviewers into one entry with multiple attributions; surface contradictions and refuted/unverifiable items; annotate any finding you judge technically unsound. **Verifier-failure fallback:** if a `perReviewer` entry has an empty `verified` array but a non-empty `findings` array plus a `note` indicating the verifier failed, surface those `findings` tagged `[Unverified]` rather than dropping them — the reviewer ran, only its verifier crashed.
 3. Present the report. Then STOP (see `<no_implementation>` at top).
 

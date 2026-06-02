@@ -5,12 +5,12 @@ Multi-perspective code review agent for Claude Code.
 ## What This Is
 
 Two Claude Code skills:
-- `/committee` — one-shot parallel code review from four AI reviewers (Claude, Codex, Kiro, Gemini), verifies claims, synthesizes a structured report.
-- `/committee-loop` (v1.0) — spawns a detached session in an isolated worktree to iteratively review-and-refine a target file until clean. Iter-1 runs fast (Claude+Kiro+Codex, no Gemini); iter-2+ uses `/committee` (all 4). Includes a simplify pre-pass, parallel verifier subagents, and a persistent decision ledger to prevent thrashing.
+- `/committee` — one-shot parallel code review from five AI reviewers (Claude, Codex, Kiro, Gemini, and a second Gemini pinned to the latest pro model), verifies claims, synthesizes a structured report.
+- `/committee-loop` (v1.0) — spawns a detached session in an isolated worktree to iteratively review-and-refine a target file until clean. Iter-1 runs fast (Claude+Kiro+Codex, no Gemini); iter-2+ uses `/committee` (all 5). Includes a simplify pre-pass, parallel verifier subagents, and a persistent decision ledger to prevent thrashing.
 
 ## Prerequisites
 
-All four reviewer CLIs must be installed and authenticated:
+All four reviewer CLIs must be installed and authenticated (the fifth reviewer reuses the `gemini` CLI, just pinned to a different model):
 
 - **codex** — `npm install -g @openai/codex` then `codex login`
 - **kiro-cli** — See https://kiro.dev for installation, then `kiro-cli settings` to configure
@@ -52,7 +52,7 @@ Optional cross-scope flags (combine with any scope above):
 - `docs/superpowers/specs/` — Design spec
 - `docs/superpowers/plans/` — Implementation plan
 
-Note: all four reviewers run inside the `committee-review` workflow (`prompts/committee-review.js`), which also runs a per-reviewer verifier agent and returns structured findings; the skill keeps prep (scope, diff, trust dialog) and synthesis. Claude runs as a built-in `general-purpose` agent filled with `prompts/reviewers/claude.md` — committee does NOT use a plugin `code-reviewer` agent type: superpowers 5.1.0 ships no agents, and an absent `subagent_type` is an unrecoverable dispatch error (this is what broke the old `superpowers:code-reviewer` path). Committee still depends on superpowers *skills* — `receiving-code-review` for findings verification — just not on any agent type. The workflow picks a per-scope review lens (code / PR / plan) so the single Claude template adapts to the review type. Codex uses `codex review` (branch/commit/uncommitted) or `codex exec` (sha_range / pr / files / plan). Only Kiro and Gemini need separate prompt templates because they're invoked via freeform CLI.
+Note: all five reviewers run inside the `committee-review` workflow (`prompts/committee-review.js`), which also runs a per-reviewer verifier agent and returns structured findings; the skill keeps prep (scope, diff, trust dialog) and synthesis. Claude runs as a built-in `general-purpose` agent filled with `prompts/reviewers/claude.md` — committee does NOT use a plugin `code-reviewer` agent type: superpowers 5.1.0 ships no agents, and an absent `subagent_type` is an unrecoverable dispatch error (this is what broke the old `superpowers:code-reviewer` path). Committee still depends on superpowers *skills* — `receiving-code-review` for findings verification — just not on any agent type. The workflow picks a per-scope review lens (code / PR / plan) so the single Claude template adapts to the review type. Codex uses `codex review` (branch/commit/uncommitted) or `codex exec` (sha_range / pr / files / plan). Only Kiro and Gemini need separate prompt templates because they're invoked via freeform CLI.
 
 ## Developing & deploying changes
 
@@ -66,7 +66,7 @@ Note: all four reviewers run inside the `committee-review` workflow (`prompts/co
 
 ## Architectural Notes
 
-**Reviewer parallelism** — the `committee-review` workflow dispatches all four reviewers (Claude as a `general-purpose` agent + the Codex/Kiro/Gemini CLIs) in parallel via `pipeline()`, then streams each reviewer into a per-reviewer verifier agent as soon as its review completes (no barrier between the Review and Verify stages). It returns `{ quorum, degraded, perReviewer }`; the skill synthesizes the Critical/Important/Minor report from that.
+**Reviewer parallelism** — the `committee-review` workflow dispatches all five reviewers (Claude as a `general-purpose` agent, the Codex/Kiro/Gemini CLIs, and a second Gemini pinned to `gemini-3.1-pro-preview` — the latest pro, no flash fallback, writes its own `gemini-pro.md`) in parallel via `pipeline()`, then streams each reviewer into a per-reviewer verifier agent as soon as its review completes (no barrier between the Review and Verify stages). It returns `{ quorum, degraded, perReviewer }`; the skill synthesizes the Critical/Important/Minor report from that.
 
 **Arg delivery** — the skill invokes the workflow with an `args` object, but the harness may deliver it to the workflow as a JSON *string*; `committee-review.js` accepts either form (parses a string, uses an object as-is) and fails fast if `sessionDir`/`promptsDir` are missing.
 
