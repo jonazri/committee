@@ -49,6 +49,12 @@ const baseSha = a.baseSha || 'none'
 const headSha = a.headSha || 'none'
 const commitSha = a.commitSha || 'N/A'
 
+// Shell-quote a value for safe interpolation into a shell command: wrap in single
+// quotes and escape any embedded single-quote as the POSIX '\'' idiom. Used for every
+// path/branch that reaches a shell (a repo cloned under e.g. /home/o'reilly would
+// otherwise break or inject). NOT used for agent-prose interpolations (Read-tool paths).
+const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
+
 const FINDINGS = {
   type: 'object', additionalProperties: false,
   required: ['reviewer', 'ran_ok', 'findings'],
@@ -85,6 +91,8 @@ const VERIFIED = {
           severity: { type: 'string', enum: ['critical', 'important', 'minor'] },
           verdict: { type: 'string', enum: ['confirmed', 'refuted', 'unverifiable'] },
           evidence: { type: 'string' },
+          file: { type: 'string', description: 'file:line carried from the finding (for synthesis attribution)' },
+          detail: { type: 'string', description: 'finding detail carried through for synthesis' },
         },
       },
     },
@@ -93,8 +101,8 @@ const VERIFIED = {
 
 // Per-scope review lens — mirrors the SKILL.md table.
 function lensFor(t) {
-  if (t === 'pr') return 'Pull-request review. Treat the changes as one cohesive unit; assess whether they fully and safely accomplish the PR\'s stated purpose; flag anything that should block merge. Findings are independently re-verified downstream, so report genuine concerns.'
-  if (t === 'plan') return 'Implementation-plan review. The content is a plan document, not code. Evaluate whether an implementing agent could follow it without ambiguity — missing steps, undefined terms, ordering hazards, verification gaps.'
+  if (t === 'pr') return 'Pull-request review. Treat the changes as one cohesive unit and assess whether they fully and safely accomplish the PR\'s stated purpose; flag anything that should block merge. Findings are independently re-verified downstream, so report genuine concerns rather than self-suppressing borderline ones.'
+  if (t === 'plan') return 'Implementation-plan review. The content is a plan document, not code. Evaluate whether an implementing agent could follow it without ambiguity — missing steps, undefined terms, unstated assumptions, ordering hazards, verification gaps. Severity reflects how badly each gap would derail implementation.'
   if (t === 'files') return 'Standard code review of the source files provided (a set of files, not a diff).'
   return 'Standard code review of the changes in the git range.'
 }
@@ -104,8 +112,8 @@ const gitInstr = trust === 'read-only'
   ? `Read the precomputed diff at ${a.diffPath} (summary at ${a.diffStatPath}). Do NOT run git.`
   : (a.scopeType === 'commit'
       ? `Run: git show ${commitSha}`
-      : (a.scopeType === 'files' || a.scopeType === 'plan'
-          ? `Read ${a.diffPath} (the files/plan to review).`
+      : (a.scopeType === 'files' || a.scopeType === 'plan' || a.scopeType === 'uncommitted'
+          ? `Read ${a.diffPath} (the precomputed changes to review — files/plan content, or uncommitted diff).`
           : `Run: git diff ${baseSha}..${headSha}`))
 
 const staticNote = a.staticPath
@@ -119,34 +127,39 @@ ${staticNote}
 Return structured findings (set ran_ok=true).`
 
 const codexPrompt = `Run the Codex CLI to review, then return its findings.
+${staticNote}
 ${trust === 'read-only'
-  ? `Read-only: review the diff at ${a.diffPath}. Run with a 540000 ms Bash timeout:\n  codex review -c model_reasoning_effort=high - < ${a.diffPath} > ${a.sessionDir}/codex.md 2> ${a.sessionDir}/codex.err`
-  : `Run with a 540000 ms Bash timeout (cd ${a.projectRoot || '.'} first):\n  ${a.scopeType === 'commit'
-        ? `codex review -c model_reasoning_effort=high --commit ${commitSha}`
+  ? `Read-only: review the precomputed diff at ${a.diffPath}. Run with a 540 s shell timeout (600 s for files/plan):\n  cd ${shq(a.projectRoot || '.')} && timeout ${(a.scopeType === 'files' || a.scopeType === 'plan') ? 600 : 540} codex exec -c model_reasoning_effort=high -s read-only --ephemeral -o ${shq(a.sessionDir)}/codex.md - 2> ${shq(a.sessionDir)}/codex.err <<'P'\nRead and review the precomputed diff at ${a.diffPath}. Do not explore beyond it. Output Critical/Important/Minor with file:line.\nP`
+  : `Run with a 540 s shell timeout (600 s for files/plan — codex may explore aux code). Each branch cd's to the project root and self-redirects (codex review captures stdout; codex exec writes via -o):\n  cd ${shq(a.projectRoot || '.')} && ${a.scopeType === 'commit'
+        ? `timeout 540 codex review -c model_reasoning_effort=high --commit ${commitSha} > ${shq(a.sessionDir)}/codex.md 2> ${shq(a.sessionDir)}/codex.err`
         : a.scopeType === 'branch_diff'
-          ? `codex review -c model_reasoning_effort=high --base ${a.baseBranch}`
+          ? `timeout 540 codex review -c model_reasoning_effort=high --base '${a.baseBranch.replace(/'/g, "'\\''")}' > ${shq(a.sessionDir)}/codex.md 2> ${shq(a.sessionDir)}/codex.err`
           : a.scopeType === 'uncommitted'
-            ? `codex review -c model_reasoning_effort=high --uncommitted`
-            : `codex exec -c model_reasoning_effort=high --ephemeral -o ${a.sessionDir}/codex.md - <<'P'\nReview the changes between ${baseSha} and ${headSha}: run git diff --stat ${baseSha}..${headSha} then git diff ${baseSha}..${headSha}. Output Critical/Important/Minor with file:line.\nP`} > ${a.sessionDir}/codex.md 2> ${a.sessionDir}/codex.err`}
+            ? `timeout 540 codex review -c model_reasoning_effort=high --uncommitted > ${shq(a.sessionDir)}/codex.md 2> ${shq(a.sessionDir)}/codex.err`
+            : (a.scopeType === 'files' || a.scopeType === 'plan')
+              ? `timeout 600 codex exec -c model_reasoning_effort=high --ephemeral -o ${shq(a.sessionDir)}/codex.md - 2> ${shq(a.sessionDir)}/codex.err <<'P'\nRead and review the file(s)/plan content at ${a.diffPath}. Output Critical/Important/Minor with file:line.\nP`
+              : `timeout 540 codex exec -c model_reasoning_effort=high --ephemeral -o ${shq(a.sessionDir)}/codex.md - 2> ${shq(a.sessionDir)}/codex.err <<'P'\nReview the changes between ${baseSha} and ${headSha}: run git diff --stat ${baseSha}..${headSha} then git diff ${baseSha}..${headSha}. Output Critical/Important/Minor with file:line.\nP`}`}
 IMPORTANT: \`codex review\` writes its ENTIRE output — including the final review — to STDERR, not stdout. After it runs, on a clean exit, if ${a.sessionDir}/codex.md is empty but ${a.sessionDir}/codex.err is non-empty, the review is in codex.err — read that. (codex exec writes its -o file directly and needs no recovery.) If codex exited non-zero with no review, set ran_ok=false with the reason. Parse the review into findings.`
 
-const kiroPrompt = `Run the Kiro CLI to review. Read ${a.promptsDir}/reviewers/kiro.md for the review framing.
-Run with a 320000 ms Bash timeout (cd ${a.projectRoot || '.'} first):
+const kiroPrompt = `Run the Kiro CLI to review. Read ${a.promptsDir}/reviewers/kiro.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
+Run with a 300000 ms Bash timeout:
 ${trust === 'read-only'
-  ? `  timeout 300 kiro-cli chat --no-interactive --trust-tools=fs_read "Read ${a.diffPath} (the diff) and review it. Report Critical/Important/Minor with file:line." > ${a.sessionDir}/kiro.md 2> ${a.sessionDir}/kiro.err`
-  : `  timeout 300 kiro-cli chat --no-interactive --trust-all-tools "Review the changes (${a.scopeType === 'commit' ? `git show ${commitSha}` : `git diff ${baseSha}..${headSha}`}). Report Critical/Important/Minor with file:line." > ${a.sessionDir}/kiro.md 2> ${a.sessionDir}/kiro.err`}
+  ? `  cd ${shq(a.projectRoot || '.')} && timeout 300 kiro-cli chat --no-interactive --trust-tools=fs_read "Read '${a.diffPath}' (the diff) and review it. Report Critical/Important/Minor with file:line." > ${shq(a.sessionDir)}/kiro.md 2> ${shq(a.sessionDir)}/kiro.err`
+  : `  cd ${shq(a.projectRoot || '.')} && timeout 300 kiro-cli chat --no-interactive --trust-all-tools "${a.scopeType === 'commit' ? `Review the changes (git show ${commitSha}).` : (a.scopeType === 'files' || a.scopeType === 'plan' || a.scopeType === 'uncommitted') ? `Read '${a.diffPath}' (the precomputed changes) and review it.` : `Review the changes (git diff ${baseSha}..${headSha}).`} Report Critical/Important/Minor with file:line." > ${shq(a.sessionDir)}/kiro.md 2> ${shq(a.sessionDir)}/kiro.err`}
+${staticNote}
 Parse the output into findings. If it errors or returns nothing, set ran_ok=false with the reason.`
 
-const geminiPrompt = `Run the Gemini CLI to review. Read ${a.promptsDir}/reviewers/gemini.md for the review framing.
-Do NOT pass any -m model pin (let the CLI fallback chain handle capacity). Run with a 320000 ms Bash timeout (cd ${a.projectRoot || '.'} first):
+const geminiPrompt = `Run the Gemini CLI to review. Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
+Do NOT pass any -m model pin (let the CLI fallback chain handle capacity). Run with a 300000 ms Bash timeout:
 ${trust === 'read-only'
-  ? `  cat ${a.diffPath} | gemini -p "Review the diff on stdin. Report Critical/Important/Minor with file:line." -e code-review -o text > ${a.sessionDir}/gemini.md 2> ${a.sessionDir}/gemini.err`
-  : `  git ${a.scopeType === 'commit' ? `show ${commitSha}` : `diff ${baseSha}..${headSha}`} | gemini -p "Review the diff on stdin. Report Critical/Important/Minor with file:line." -e code-review -y -o text > ${a.sessionDir}/gemini.md 2> ${a.sessionDir}/gemini.err`}
+  ? `  cd ${shq(a.projectRoot || '.')} && cat ${shq(a.diffPath)} | timeout 300 gemini -p "Review the diff on stdin. Report Critical/Important/Minor with file:line." -e code-review -o text > ${shq(a.sessionDir)}/gemini.md 2> ${shq(a.sessionDir)}/gemini.err`
+  : `  cd ${shq(a.projectRoot || '.')} && ${a.scopeType === 'commit' ? `git show ${commitSha}` : (a.scopeType === 'files' || a.scopeType === 'plan' || a.scopeType === 'uncommitted') ? `cat ${shq(a.diffPath)}` : `git diff ${baseSha}..${headSha}`} | timeout 300 gemini -p "Review the changes on stdin. Report Critical/Important/Minor with file:line." -e code-review -y -o text > ${shq(a.sessionDir)}/gemini.md 2> ${shq(a.sessionDir)}/gemini.err`}
+${staticNote}
 Parse the output into findings. If it errors or returns nothing, set ran_ok=false with the reason.`
 
 function verifyPrompt(rev) {
-  return `You are committee's verifier for the ${rev.reviewer} reviewer. Read ${a.promptsDir}/verifier.md and follow it.
-Verify each finding below against the actual code in ${a.projectRoot || '.'} (git range ${baseSha}..${headSha}; for uncommitted use git diff / git diff --staged; or read ${a.diffPath}). Tag each confirmed / refuted / unverifiable with one-line evidence. Default to refuted/unverifiable unless you can confirm it is real. Preserve each finding's severity.
+  return `You are committee's verifier for the ${rev.reviewer} reviewer. Read ${a.promptsDir}/verifier.md and follow it (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the reviewer name, scope, and paths given in this prompt). NOTE: the findings to verify are inlined below — there is NO separate review file, so ignore verifier.md's "{REVIEW_FILE_PATH}" / "read the review file first" step and work directly from the FINDINGS block.
+Verify each finding below against the actual code in ${a.projectRoot || '.'} (git range ${baseSha}..${headSha}; for uncommitted use git diff / git diff --staged; or read ${a.diffPath}). Tag each confirmed / refuted / unverifiable with one-line evidence. Default to refuted/unverifiable unless you can confirm it is real. Preserve each finding's severity, file, and detail in your output.
 
 FINDINGS:
 ${(rev.findings || []).map((f, i) => `${i + 1}. [${f.severity}] ${f.file} — ${f.title}: ${f.detail}`).join('\n')}`
@@ -160,18 +173,30 @@ const reviewers = [
   { name: 'Gemini', prompt: geminiPrompt },
 ]
 
+// pipeline() fans stage-1 (review) out across all reviewers concurrently — this IS
+// the spec's "parallel() Review" — then streams each reviewer into stage-2 (verify)
+// as it completes (no barrier between stages).
 const results = await pipeline(
   reviewers,
   r => agent(r.prompt, Object.assign({ label: `review:${r.name}`, phase: 'Review', schema: FINDINGS }, r.model ? { model: r.model } : {}))
         .then(x => ({ ...x, reviewer: x.reviewer || r.name }))
         .catch(() => ({ reviewer: r.name, ran_ok: false, note: 'agent error', findings: [] })),
   rev => {
-    if (!rev || !rev.ran_ok || !(rev.findings || []).length) {
-      return { reviewer: rev && rev.reviewer ? rev.reviewer : '?', ran_ok: !!(rev && rev.ran_ok), note: rev && rev.note, verified: [] }
+    if (!rev || !rev.ran_ok) {
+      // reviewer genuinely failed (no review produced) — drop from quorum
+      return { reviewer: rev?.reviewer ?? '?', ran_ok: false, note: rev?.note, verified: [] }
+    }
+    if (!(rev.findings || []).length) {
+      // reviewer ran successfully but found nothing — keep ran_ok=true so it
+      // still counts toward quorum; nothing to verify
+      return { reviewer: rev.reviewer, ran_ok: true, note: rev.note, verified: [] }
     }
     return agent(verifyPrompt(rev), { label: `verify:${rev.reviewer}`, phase: 'Verify', schema: VERIFIED, model: 'sonnet' })
       .then(v => ({ ...v, reviewer: rev.reviewer, ran_ok: true }))
-      .catch(() => ({ reviewer: rev.reviewer, ran_ok: true, verified: [] }))
+      // Verifier crashed but the reviewer DID run: keep ran_ok=true, flag the
+      // failure via note, and carry the unverified findings forward so they are
+      // not silently lost (the skill surfaces them as unverified).
+      .catch(() => ({ reviewer: rev.reviewer, ran_ok: true, verified: [], findings: rev.findings, note: 'verifier agent failed; findings unverified' }))
   }
 )
 
@@ -183,13 +208,15 @@ return { quorum: ran.length, degraded: ran.length < 2, perReviewer: results }
 - [ ] **Step 2: Structural sanity check**
 
 Do NOT use `node --check` / `node` — workflow scripts combine `export`, top-level `await`, top-level `return`, and runtime-injected globals (`args`/`agent`/`phase`/`pipeline`/`log`); no Node parse mode accepts that combination, so Node would report false syntax errors. The Workflow runtime is the only correct parser — Step 3's smoke run is the real syntax+semantics gate.
-Run: `grep -c "export const meta" prompts/committee-review.js && grep -c "phase('Review')\|phase('Verify')\|await pipeline" prompts/committee-review.js`
+Run: `grep -c "export const meta" prompts/committee-review.js && grep -c "phase('Review')\|await pipeline" prompts/committee-review.js`
 Expected: `meta` present once; the phase/pipeline calls present. Eyeball brace/paren balance.
 
 - [ ] **Step 3: Smoke-run the workflow via scriptPath against a small commit**
 
 Invoke the Workflow tool with `{ scriptPath: "<repo>/prompts/committee-review.js", args: { scopeType:"commit", scopeDescription:"commit <sha>", commitSha:"<sha>", baseSha:"<sha>^", headSha:"<sha>", projectRoot:"<repo>", promptsDir:"<repo>/prompts", sessionDir:"/tmp/committee-smoke", diffPath:"/tmp/committee-smoke/diff.txt", diffStatPath:"/tmp/committee-smoke/diff_stat.txt", trust:"auto" } }` after `mkdir -p /tmp/committee-smoke && git -C <repo> show <sha> > /tmp/committee-smoke/diff.txt`.
 Expected: workflow completes; returns `{ quorum: >=2, perReviewer: [...] }`; verifiers ran as agents (visible in `/workflows`); no `claude -p` anywhere.
+
+**This is a BLOCKING gate, not a checklist item.** If the return does not include `quorum` ≥ 2, or any reviewer's command form errored (e.g. an invalid `codex` invocation, a malformed heredoc, a `git diff none..none`), STOP and debug the failing scope branch before proceeding to Task 2. A green Step 2 grep does not substitute for a successful run here — this is the only real syntax+semantics gate for the workflow (per Step 2's note).
 
 - [ ] **Step 4: Commit**
 
@@ -220,7 +247,10 @@ mkdir -p "$HOME/.claude/workflows"
 safe_symlink "$REPO_DIR/prompts/committee-review.js" "$HOME/.claude/workflows/committee-review.js"
 ```
 
-(Use whatever variable `install.sh` already uses for the repo root in place of `$REPO_DIR`.)
+(Use whatever variable `install.sh` already uses for the repo root in place of `$REPO_DIR` — it is `REPO_ROOT`.)
+
+Also in the same edit, **update install.sh's existence-guard loop** (the `for f in … ; do [ -f "$f" ] || …` block near the top) so it no longer requires the about-to-be-deleted `coordinator.md`: replace the `"$REPO_ROOT/prompts/coordinator.md"` entry with `"$REPO_ROOT/prompts/committee-review.js"`. Without this, `./install.sh` exits 1 once Task 4 removes `coordinator.md`.
+Verify after this task: `grep -n 'coordinator.md' install.sh` returns nothing.
 
 - [ ] **Step 3: Run the installer**
 
@@ -235,7 +265,7 @@ Expected: symlink → `<repo>/prompts/committee-review.js`.
 - [ ] **Step 5: Verify named resolution in a FRESH session (the spec's open item)**
 
 Start a new Claude Code session, then invoke the Workflow tool with `{ name: "committee-review", args: {...minimal smoke args as Task 1 Step 3...} }`.
-Expected: resolves and runs. **If it errors "not found":** the symlink-registration path does not work — record this and use the `scriptPath` fallback in Task 3 Step 2 instead of `name`. Either way the workflow file is unchanged.
+Expected: resolves and runs. **If it errors "not found":** the symlink-registration path does not work — record this and use the `scriptPath` fallback in Task 3 Step 1 (the `Workflow` invocation) instead of `name`. Either way the workflow file is unchanged.
 
 - [ ] **Step 6: Commit**
 
@@ -249,7 +279,12 @@ git commit -m "build(committee): install committee-review as a user-scope named 
 ## Task 3: Rewrite SKILL.md to invoke the workflow
 
 **Files:**
-- Modify: `.claude/skills/committee/SKILL.md` (the `## Dispatch Claude + coordinator (parallel)` section through `## Failure modes`)
+- Modify: `.claude/skills/committee/SKILL.md` — two regions: (a) the `PROMPTS_DIR` resolution stanza in `## Resolve scope and set up the session` (Step 1a below), and (b) the `## Dispatch Claude + coordinator (parallel)` section through `## Failure modes` (Steps 1–3).
+
+- [ ] **Step 1a: Re-point the `PROMPTS_DIR` resolution sentinel (CRITICAL — outside the dispatch section)**
+
+In `## Resolve scope and set up the session`, the `for cand in … ; do [ -f "$cand/coordinator.md" ] && …` loop keys `PROMPTS_DIR` discovery on `coordinator.md`. Once Task 4 deletes that file, the loop never resolves and **every** `/committee` run aborts with "committee prompts dir not found" before reaching dispatch. Change the sentinel from `coordinator.md` to a file that survives — `committee-review.js` (or `reviewers/claude.md`).
+Verify after this task: `grep -n 'coordinator.md' .claude/skills/committee/SKILL.md` returns nothing (the pre-dispatch check in Step 1 and any other live refs are also gone).
 
 - [ ] **Step 1: Replace the dispatch section**
 
@@ -258,7 +293,7 @@ Replace the entire `### Claude reviewer (background)` + `### Coordinator (foregr
 ```markdown
 ## Dispatch the review workflow
 
-After the pre-dispatch check (the `$PROMPTS_DIR/coordinator.md` check is replaced by a `$PROMPTS_DIR/committee-review.js` check — abort cleanly the same way if missing), build the `args` object from the manifest and invoke the committee workflow:
+After the pre-dispatch check (the old template-existence check now verifies `$PROMPTS_DIR/committee-review.js` instead of the removed template — abort cleanly the same way if missing), build the `args` object from the manifest and invoke the committee workflow:
 
 Invoke the `Workflow` tool with `name: "committee-review"` (fallback: `scriptPath: "$PROMPTS_DIR/committee-review.js"` if Task 2 Step 5 showed named resolution does not work) and `args`:
 
@@ -274,7 +309,7 @@ Invoke the `Workflow` tool with `name: "committee-review"` (fallback: `scriptPat
 }
 ​```
 
-Use `none` for absent SHAs and `N/A` for `commitSha` outside commit scope (the workflow already defaults these, but pass the manifest values).
+Pass the manifest values; the workflow defaults absent SHAs to `none` and `commitSha` to `N/A`.
 ```
 
 - [ ] **Step 2: Replace the synthesis/cleanup tail**
@@ -284,15 +319,15 @@ Replace `## Evaluate and display` to consume the workflow's structured return in
 ```markdown
 ## Evaluate and display
 
-The workflow returns `{ quorum, degraded, perReviewer: [{reviewer, ran_ok, note, verified:[{title,severity,verdict,evidence}]}] }`.
+The workflow returns `{ quorum, degraded, perReviewer: [{reviewer, ran_ok, note?, verified:[{title,severity,verdict,evidence,file?,detail?}]}] }`. Two extra shapes occur on degraded paths: a reviewer that ran clean has `verified:[]` (and is still counted in quorum); a reviewer whose verifier crashed has `verified:[]` plus a non-empty `findings:[…]` and a `note` (handled by the verifier-failure fallback in step 2).
 
 1. If `quorum < 2` (`degraded: true`), present the degraded-quorum ABORT message (same wording as before) listing which reviewers failed (`ran_ok:false` + `note`), then go to cleanup.
-2. Otherwise invoke `superpowers:receiving-code-review` over the confirmed findings, then synthesize the **Critical/Important/Minor** report (dedup the same finding across reviewers into one entry with multiple attributions; surface contradictions and refuted/unverifiable items) in the existing report format. Annotate any finding you judge technically unsound.
+2. Otherwise invoke `superpowers:receiving-code-review` over the confirmed findings, then synthesize the **Critical/Important/Minor** report (dedup the same finding across reviewers into one entry with multiple attributions; surface contradictions and refuted/unverifiable items) in the existing report format. Annotate any finding you judge technically unsound. **Verifier-failure fallback:** if a `perReviewer` entry has an empty `verified` array but a non-empty `findings` array plus a `note` indicating the verifier failed, surface those `findings` in the report tagged `[Unverified]` rather than dropping them — the reviewer ran, only its verifier crashed.
 3. Present the report. Then STOP (`<no_implementation>`).
 
 ## Cleanup (after presenting)
 
-Run `rm -rf -- "$SESSION_DIR"`. If PR scope and `PR_BASE_REF` is set, also `git update-ref -d "$PR_BASE_REF"`. If the `Workflow` call itself errored, do NOT delete `$SESSION_DIR` — tell the user it is preserved for inspection and stop.
+Run `rm -rf -- "$SESSION_DIR"`. If PR scope and `PR_BASE_REF` is set, also `git update-ref -d "$PR_BASE_REF"`. If the `Workflow` call itself errored, do NOT delete `$SESSION_DIR` — tell the user it is preserved for inspection and stop — but STILL run `git update-ref -d "$PR_BASE_REF"` for PR scope (it is committee's own `refs/pr-committee/*` namespace; leaving it leaks a stale ref).
 ```
 
 - [ ] **Step 3: Update the failure-modes section**
@@ -301,7 +336,7 @@ In `## Failure modes`, delete `<failure_mode name="claude_dispatch_failed">` and
 
 ```markdown
 <failure_mode name="workflow_failed">
-The `Workflow` call errored or returned no usable result → tell the user the review workflow failed, note that `$SESSION_DIR` is preserved for inspection, and STOP. Do not delete the session dir.
+The `Workflow` call errored or returned no usable result → tell the user the review workflow failed, note that `$SESSION_DIR` is preserved for inspection, and STOP. Do not delete the session dir. For PR scope, still run `git update-ref -d "$PR_BASE_REF"` so the fetched `refs/pr-committee/*` ref is not left behind.
 </failure_mode>
 ```
 
@@ -329,7 +364,7 @@ git commit -m "refactor(committee): invoke committee-review workflow instead of 
 - [ ] **Step 1: Confirm nothing else loads coordinator.md**
 
 Run: `grep -rn "coordinator.md\|coordinator template" .claude prompts install.sh README.md CLAUDE.md | grep -v docs/superpowers`
-Expected: only the now-replaced SKILL.md preflight reference (already handled in Task 3) — if any live load remains, fix it.
+Expected: **no live references remain** — Task 2 Step 2 already re-pointed install.sh's existence guard, Task 3 Step 1a re-pointed SKILL.md's `PROMPTS_DIR` sentinel, and Task 3 Step 1 replaced the pre-dispatch check. Any remaining match (other than past-tense prose in README.md/CLAUDE.md, handled in Task 5) is a live load — fix it before deleting.
 
 - [ ] **Step 2: Confirm the workflow's template reads are correct**
 
@@ -385,8 +420,8 @@ git commit -m "docs(committee): describe the committee-review workflow architect
 - [ ] **Step 2: Read-only trust** — `/committee --files <small file> --trust=read-only`.
   Expected: completes; CLI reviewers used no-shell invocations (Kiro `--trust-tools=fs_read`, Gemini stdin); report produced.
 
-- [ ] **Step 3: Degraded quorum** — temporarily make one CLI unavailable (e.g. `PATH` without `codex`) and run `/committee --commit <sha>`.
-  Expected: report still produced from the remaining reviewers with a degraded-quorum note; no crash.
+- [ ] **Step 3: Reviewer dropout + degraded quorum** — temporarily make one CLI unavailable (e.g. `PATH` without `codex`) and run `/committee --commit <sha>`.
+  Expected: report still produced from the remaining 3 reviewers; the failed reviewer is listed (`ran_ok:false` + `note`) but **there is NO degraded-quorum ABORT** — quorum is 3, above the `< 2` threshold, so `degraded:false`. Do not expect a degraded note here; an executor that does would wrongly fail a correct implementation. To exercise the actual `degraded:true` ABORT path, make THREE CLIs unavailable (leaving only Claude): then `quorum < 2` and the degraded-quorum abort message appears. No crash in either case.
 
 - [ ] **Step 4: committee-loop regression** — `/committee-loop <small file>` (or a dry iter-2 path) to confirm the unchanged `/committee` interface still drives it.
   Expected: iter-2+ `/committee --files … --trust=auto` runs through the workflow and returns a report.
@@ -403,5 +438,5 @@ git add -A && git commit -m "test(committee): verify workflow migration end-to-e
 
 - **Spec coverage:** §1 boundary → Tasks 3–4; §2 deploy → Task 2; §3 args/data-flow → Tasks 1 & 3; §4 error/quorum/trust/codex → Task 1 (workflow logic) + Task 3 (degraded handling); §5 acceptance → Task 6.
 - **Open item:** Task 2 Step 5 decides `name` vs `scriptPath` — carry that decision into Task 3 Step 1.
-- **Type consistency:** the return shape `{quorum, degraded, perReviewer:[{reviewer, ran_ok, note, verified:[{title,severity,verdict,evidence}]}]}` is produced in Task 1 and consumed verbatim in Task 3 Step 2.
+- **Type consistency:** the return shape `{quorum, degraded, perReviewer:[{reviewer, ran_ok, note?, verified:[{title,severity,verdict,evidence,file?,detail?}]}]}` is produced in Task 1 and consumed verbatim in Task 3 Step 2 (which also handles the clean `verified:[]` and verifier-crash `findings:[…]` fallback shapes).
 - **No silent loss:** workflow-level failure preserves `$SESSION_DIR` (Task 3 Steps 2–3).
