@@ -13,6 +13,25 @@ set -euo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_DIR="$HOME/.claude/skills"
 
+# Refuse to run from a LINKED git worktree. install.sh repoints the global ~/.claude symlinks
+# at $REPO_ROOT; if a committee/committee-loop reviewer ever runs it from an ephemeral worktree
+# (e.g. while reviewing a plan that says "Run: ./install.sh"), those symlinks would point into a
+# directory that later gets torn down — silently breaking the global /committee + /committee-loop
+# install. In the primary checkout the git-dir equals the common-dir; in a linked worktree they
+# differ. Non-git installs skip this guard (both vars come back empty).
+_gd=$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir 2>/dev/null || true)
+_gcd=$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null || true)
+if [ -n "$_gd" ] && [ -n "$_gcd" ]; then
+  _gcd=$(cd -- "$REPO_ROOT" 2>/dev/null && cd -- "$_gcd" 2>/dev/null && pwd -P || true)
+  if [ -n "$_gcd" ] && [ "$_gd" != "$_gcd" ]; then
+    echo "install.sh: refusing to run from a linked git worktree:" >&2
+    echo "  $REPO_ROOT" >&2
+    echo "  Installing from a worktree repoints your global ~/.claude symlinks at a directory" >&2
+    echo "  that may later be removed. Run install.sh from your primary committee clone instead." >&2
+    exit 1
+  fi
+fi
+
 for f in \
   "$REPO_ROOT/.claude/skills/committee/SKILL.md" \
   "$REPO_ROOT/.claude/skills/committee-loop/SKILL.md" \
