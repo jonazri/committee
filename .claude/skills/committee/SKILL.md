@@ -120,7 +120,7 @@ Otherwise, call the `AskUserQuestion` tool with:
 
 Record the answer as `auto` or `read-only`. Default to `auto` if unanswered or on tool failure.
 
-The value you record here is what you substitute for `Trust level:` in the `{REVIEW_CONTEXT}` block below.
+The value you record here is what you pass as the `trust` field in the workflow `args` object below (the **Dispatch the review workflow** section).
 
 ## Dispatch the review workflow
 

@@ -141,7 +141,7 @@ const claudePrompt = `You are committee's Claude reviewer. Working dir is the re
 Read the template at ${a.promptsDir}/reviewers/claude.md and follow it. Fill: WHAT_WAS_IMPLEMENTED=${a.scopeDescription}; DESCRIPTION=${a.scopeDescription}; PLAN_OR_REQUIREMENTS=${a.specPath || 'General code review — no specific plan'}; BASE_SHA=${baseSha}; HEAD_SHA=${headSha}; COMMIT_SHA=${commitSha}; REVIEW_LENS=${lensFor(a.scopeType)}.
 ${gitInstr}
 ${staticNote}
-Return structured findings (set ran_ok=true).`
+Ignore claude.md's "## Output Format" markdown report (Strengths/Issues/Assessment) and its note about the verifier normalizing a markdown format — those describe committee's old file-based flow. Return ONLY this workflow's structured findings (severity/file/title/detail per finding; set ran_ok=true).`
 
 // Scope routing for every CLI reviewer below: commit / branch_diff / uncommitted / files /
 // plan are matched explicitly; sha_range and pr (no native codex flag) fall through to the
