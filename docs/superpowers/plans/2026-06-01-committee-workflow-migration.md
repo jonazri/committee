@@ -12,6 +12,8 @@
 
 **Domain note:** This is prompt/workflow engineering. There is no unit-test harness; each task's verification step is a real smoke run, grep, or fresh-session check (the spec §5 acceptance criteria). Commit after each task.
 
+**Grep-exit convention:** several verification steps below run a `grep` that "expects no matches". A `grep` with no match exits non-zero (1). Treat a non-zero exit / empty output from those "expect nothing" greps as **PASS**, not failure — do not let an automated executor read exit 1 there as a failed step.
+
 ---
 
 ## File Structure
@@ -57,7 +59,10 @@ const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
 
 const FINDINGS = {
   type: 'object', additionalProperties: false,
-  required: ['reviewer', 'ran_ok', 'findings'],
+  // `reviewer` is NOT required: the agent isn't prompted to emit it and the pipeline
+  // backfills it (x.reviewer || r.name). Requiring it risks a schema-validation
+  // failure/retry before the backfill runs.
+  required: ['ran_ok', 'findings'],
   properties: {
     reviewer: { type: 'string' },
     ran_ok: { type: 'boolean', description: 'did this reviewer actually produce a review' },
@@ -78,7 +83,8 @@ const FINDINGS = {
 
 const VERIFIED = {
   type: 'object', additionalProperties: false,
-  required: ['reviewer', 'verified'],
+  // `reviewer` backfilled by the verify stage (...v, reviewer: rev.reviewer); not required.
+  required: ['verified'],
   properties: {
     reviewer: { type: 'string' },
     verified: {
@@ -104,7 +110,16 @@ function lensFor(t) {
   if (t === 'pr') return 'Pull-request review. Treat the changes as one cohesive unit and assess whether they fully and safely accomplish the PR\'s stated purpose; flag anything that should block merge. Findings are independently re-verified downstream, so report genuine concerns rather than self-suppressing borderline ones.'
   if (t === 'plan') return 'Implementation-plan review. The content is a plan document, not code. Evaluate whether an implementing agent could follow it without ambiguity — missing steps, undefined terms, unstated assumptions, ordering hazards, verification gaps. Severity reflects how badly each gap would derail implementation.'
   if (t === 'files') return 'Standard code review of the source files provided (a set of files, not a diff).'
+  if (t === 'uncommitted') return 'Code review of the uncommitted working-tree changes.'
   return 'Standard code review of the changes in the git range.'
+}
+
+// Scope-conditional focus areas — mirrors coordinator.md's {FOCUS_AREAS} so the CLI
+// reviewers get the same coverage guidance the old coordinator filled in verbatim.
+function focusAreas(t) {
+  if (t === 'plan') return 'Completeness (every step described, no TODO/figure-out-X placeholders); feasibility with the named tools/APIs; task decomposition (single-session pieces); architectural soundness + missing edge cases (error paths, concurrency, partial failure); YAGNI; actionability (no unanticipated judgment calls)'
+  if (t === 'files') return 'Code quality (clarity, duplication); correctness (logic, edge cases); security (injection, unsafe patterns); API contracts vs callers; design (coupling, layering, abstraction)'
+  return 'Correctness (logic, off-by-one, edge cases, races); shell safety (quoting, injection, TOCTOU, temp-file races); API/contract consistency; error handling (unchecked exits, swallowed errors); security (priv-esc, data leakage); test coverage'
 }
 
 // How each reviewer should obtain the changes, by trust level.
@@ -119,6 +134,9 @@ const gitInstr = trust === 'read-only'
 const staticNote = a.staticPath
   ? `If ${a.staticPath} exists and is non-empty, also read it — advisory static-analysis findings; verify each applies before flagging.`
   : ''
+
+// Spec/plan-requirements directive — mirrors coordinator.md's spec-read trigger for CLI reviewers.
+const specNote = a.specPath ? `Also read ${a.specPath} for the design requirements behind these changes.` : ''
 
 const claudePrompt = `You are committee's Claude reviewer. Working dir is the repo at ${a.projectRoot || '.'}.
 Read the template at ${a.promptsDir}/reviewers/claude.md and follow it. Fill: WHAT_WAS_IMPLEMENTED=${a.scopeDescription}; PLAN_OR_REQUIREMENTS=${a.specPath || 'General code review — no specific plan'}; BASE_SHA=${baseSha}; HEAD_SHA=${headSha}; COMMIT_SHA=${commitSha}; REVIEW_LENS=${lensFor(a.scopeType)}.
@@ -146,6 +164,8 @@ Run with a 300000 ms Bash timeout:
 ${trust === 'read-only'
   ? `  cd ${shq(a.projectRoot || '.')} && timeout 300 kiro-cli chat --no-interactive --trust-tools=fs_read "Read '${a.diffPath}' (the diff) and review it. Report Critical/Important/Minor with file:line." > ${shq(a.sessionDir)}/kiro.md 2> ${shq(a.sessionDir)}/kiro.err`
   : `  cd ${shq(a.projectRoot || '.')} && timeout 300 kiro-cli chat --no-interactive --trust-all-tools "${a.scopeType === 'commit' ? `Review the changes (git show ${commitSha}).` : (a.scopeType === 'files' || a.scopeType === 'plan' || a.scopeType === 'uncommitted') ? `Read '${a.diffPath}' (the precomputed changes) and review it.` : `Review the changes (git diff ${baseSha}..${headSha}).`} Report Critical/Important/Minor with file:line." > ${shq(a.sessionDir)}/kiro.md 2> ${shq(a.sessionDir)}/kiro.err`}
+Focus areas: ${focusAreas(a.scopeType)}.
+${specNote}
 ${staticNote}
 Parse the output into findings. If it errors or returns nothing, set ran_ok=false with the reason.`
 
@@ -154,12 +174,14 @@ Do NOT pass any -m model pin (let the CLI fallback chain handle capacity). Run w
 ${trust === 'read-only'
   ? `  cd ${shq(a.projectRoot || '.')} && cat ${shq(a.diffPath)} | timeout 300 gemini -p "Review the diff on stdin. Report Critical/Important/Minor with file:line." -e code-review -o text > ${shq(a.sessionDir)}/gemini.md 2> ${shq(a.sessionDir)}/gemini.err`
   : `  cd ${shq(a.projectRoot || '.')} && ${a.scopeType === 'commit' ? `git show ${commitSha}` : (a.scopeType === 'files' || a.scopeType === 'plan' || a.scopeType === 'uncommitted') ? `cat ${shq(a.diffPath)}` : `git diff ${baseSha}..${headSha}`} | timeout 300 gemini -p "Review the changes on stdin. Report Critical/Important/Minor with file:line." -e code-review -y -o text > ${shq(a.sessionDir)}/gemini.md 2> ${shq(a.sessionDir)}/gemini.err`}
+Focus areas: ${focusAreas(a.scopeType)}.
+${specNote}
 ${staticNote}
 Parse the output into findings. If it errors or returns nothing, set ran_ok=false with the reason.`
 
 function verifyPrompt(rev) {
   return `You are committee's verifier for the ${rev.reviewer} reviewer. Read ${a.promptsDir}/verifier.md and follow it (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the reviewer name, scope, and paths given in this prompt). NOTE: the findings to verify are inlined below — there is NO separate review file, so ignore verifier.md's "{REVIEW_FILE_PATH}" / "read the review file first" step and work directly from the FINDINGS block.
-Verify each finding below against the actual code in ${a.projectRoot || '.'} (git range ${baseSha}..${headSha}; for uncommitted use git diff / git diff --staged; or read ${a.diffPath}). Tag each confirmed / refuted / unverifiable with one-line evidence. Default to refuted/unverifiable unless you can confirm it is real. Preserve each finding's severity, file, and detail in your output.
+Verify each finding below against the actual code in ${a.projectRoot || '.'} (${baseSha !== 'none' ? `git range ${baseSha}..${headSha}, or ` : ''}read the precomputed changes at ${a.diffPath}; for uncommitted scope use git diff / git diff --staged). Tag each confirmed / refuted / unverifiable with one-line evidence. Default to refuted/unverifiable unless you can confirm it is real. Preserve each finding's severity, file, and detail in your output.
 
 FINDINGS:
 ${(rev.findings || []).map((f, i) => `${i + 1}. [${f.severity}] ${f.file} — ${f.title}: ${f.detail}`).join('\n')}`
@@ -213,7 +235,7 @@ Expected: `meta` present once; the phase/pipeline calls present. Eyeball brace/p
 
 - [ ] **Step 3: Smoke-run the workflow via scriptPath against a small commit**
 
-Invoke the Workflow tool with `{ scriptPath: "<repo>/prompts/committee-review.js", args: { scopeType:"commit", scopeDescription:"commit <sha>", commitSha:"<sha>", baseSha:"<sha>^", headSha:"<sha>", projectRoot:"<repo>", promptsDir:"<repo>/prompts", sessionDir:"/tmp/committee-smoke", diffPath:"/tmp/committee-smoke/diff.txt", diffStatPath:"/tmp/committee-smoke/diff_stat.txt", trust:"auto" } }` after `mkdir -p /tmp/committee-smoke && git -C <repo> show <sha> > /tmp/committee-smoke/diff.txt`.
+Pick a small recent commit first: `SHA=$(git -C <repo> rev-parse HEAD)` (and `BASE=$(git -C <repo> rev-parse HEAD~1)`). Then `mkdir -p /tmp/committee-smoke && git -C <repo> show "$SHA" > /tmp/committee-smoke/diff.txt`, and invoke the Workflow tool with `{ scriptPath: "<repo>/prompts/committee-review.js", args: { scopeType:"commit", scopeDescription:"commit $SHA", commitSha:"$SHA", baseSha:"$BASE", headSha:"$SHA", projectRoot:"<repo>", promptsDir:"<repo>/prompts", sessionDir:"/tmp/committee-smoke", diffPath:"/tmp/committee-smoke/diff.txt", diffStatPath:"/tmp/committee-smoke/diff_stat.txt", trust:"auto" } }` (substitute the actual `$SHA`/`$BASE`/`<repo>` values into the args).
 Expected: workflow completes; returns `{ quorum: >=2, perReviewer: [...] }`; verifiers ran as agents (visible in `/workflows`); no `claude -p` anywhere.
 
 **This is a BLOCKING gate, not a checklist item.** If the return does not include `quorum` ≥ 2, or any reviewer's command form errored (e.g. an invalid `codex` invocation, a malformed heredoc, a `git diff none..none`), STOP and debug the failing scope branch before proceeding to Task 2. A green Step 2 grep does not substitute for a successful run here — this is the only real syntax+semantics gate for the workflow (per Step 2's note).
@@ -295,7 +317,7 @@ Replace the entire `### Claude reviewer (background)` + `### Coordinator (foregr
 
 After the pre-dispatch check (the old template-existence check now verifies `$PROMPTS_DIR/committee-review.js` instead of the removed template — abort cleanly the same way if missing), build the `args` object from the manifest and invoke the committee workflow:
 
-Invoke the `Workflow` tool with `name: "committee-review"` (fallback: `scriptPath: "$PROMPTS_DIR/committee-review.js"` if Task 2 Step 5 showed named resolution does not work) and `args`:
+Invoke the `Workflow` tool with `name: "committee-review"` (fallback: `scriptPath` set to the **resolved** `$PROMPTS_DIR` value + `/committee-review.js` — substitute the absolute path, not the literal string `$PROMPTS_DIR` — if Task 2 Step 5 showed named resolution does not work) and `args`:
 
 ​```
 {
