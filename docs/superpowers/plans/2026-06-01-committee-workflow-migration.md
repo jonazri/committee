@@ -16,6 +16,29 @@
 
 ---
 
+## Execution preamble (read first)
+
+**Driver:** execute task-by-task with `superpowers:subagent-driven-development` (fresh subagent per task, two-stage review between tasks) — or `superpowers:executing-plans` for inline batch execution.
+
+**Verification gate (every task):** before checking a task's boxes done, invoke `superpowers:verification-before-completion` — run the task's verification step(s) and paste the ACTUAL output; never call a task green on assertion alone. Honor the **grep-exit convention** above. Task 1 Step 3 is an explicit BLOCKING gate — a green grep does not substitute for a successful smoke run.
+
+**Order & dependencies:** tasks are sequential. CRITICAL ordering: Task 3 Step 1a (re-point the `PROMPTS_DIR` sentinel) and Task 2 Step 2 (re-point install.sh's existence guard) MUST land before Task 4 deletes `coordinator.md`, or every `/committee` run aborts. Decide `name` vs `scriptPath` in Task 2 Step 5 and carry that decision into Task 3 Step 1.
+
+**Fresh-session steps (cannot run mid-session):** Task 2 Step 5 (named-workflow registration loads at session start) and all of Task 6 (live `/committee` loads the skill at session start) require a NEW Claude Code session — pause and restart at those points.
+
+**Key commands & runtimes:**
+- Smoke run (Task 1 Step 3): the `Workflow` tool, ~5–8 min (4 reviewers + verifiers).
+- `./install.sh` (Task 2): idempotent symlink install, seconds.
+- Full `/committee --commit <sha>` (Task 6 Step 1): ~5–8 min.
+- `/committee-loop` regression (Task 6 Step 4): long (multi-iteration) — optional dry check.
+
+**Context the executor needs:**
+- Spec: `docs/superpowers/specs/2026-06-01-committee-workflow-migration-design.md`.
+- Repo conventions/gotchas (`CLAUDE.md`): committee installs via **symlinks** (edits go live only on a fresh session); `codex review` writes its review to **stderr**; the Claude reviewer dispatches as the built-in **`general-purpose`** agent; `PROMPTS_DIR` resolves from the install location, never `$PROJECT_ROOT`.
+- Deferred ledger (items intentionally NOT applied): `.git/committee-loop/<session>/deferred.md` — notably the read-only Gemini `-e code-review`-without-`-y` hang risk (confirm at Task 6 Step 2).
+
+---
+
 ## File Structure
 
 - **Create:** `prompts/committee-review.js` — the committee workflow (reviewers → verify → structured return). Repo source of truth; rides the `prompts/` symlink.
@@ -455,6 +478,17 @@ git add -A && git commit -m "test(committee): verify workflow migration end-to-e
 ```
 
 ---
+
+## Final verification (before declaring the migration complete)
+
+Invoke `superpowers:verification-before-completion` and confirm, with pasted evidence (evidence before assertions):
+- Task 1 smoke run returned `quorum ≥ 2` with verifier **agents** (no `claude -p` anywhere).
+- Task 6 Step 1 live `/committee --commit <sha>` showed all four reviewers in the report, **Codex included** (via stderr recovery), in the usual Critical/Important/Minor format.
+- `grep -rn "coordinator\|claude -p" .claude prompts install.sh` is clean (grep-exit convention: no output / exit 1 = PASS).
+- `grep -rn "coordinator.md" .claude/skills/committee/SKILL.md install.sh` is clean (the `PROMPTS_DIR` sentinel + install guard were re-pointed).
+- Task 6 Step 4: `/committee-loop` iter-2 still drives `/committee` through the workflow.
+
+Only after every item above is evidenced may the migration be called complete.
 
 ## Self-Review notes (for the executor)
 
