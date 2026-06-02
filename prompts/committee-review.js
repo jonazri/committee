@@ -39,6 +39,18 @@ if (!a.sessionDir || !a.promptsDir) {
   throw new Error('committee-review: missing required arg(s): ' + [!a.sessionDir && 'sessionDir', !a.promptsDir && 'promptsDir'].filter(Boolean).join(', '))
 }
 
+// Cap every reviewer/verifier agent() at 2h. A model brownout that leaves an agent neither
+// resolving nor rejecting would otherwise wedge `await pipeline()` forever; this makes it
+// reject instead, so the existing .catch() degrades that reviewer to ran_ok:false (or carries
+// its findings forward unverified). The Codex/Kiro/Gemini CLIs also have their own shorter
+// shell `timeout`; this is the agent-level backstop above those.
+const AGENT_TIMEOUT_MS = 2 * 60 * 60 * 1000 // 2 hours
+function withTimeout(p, label) {
+  let t
+  const timer = new Promise((_, reject) => { t = setTimeout(() => reject(new Error('agent timed out after 2h: ' + label)), AGENT_TIMEOUT_MS) })
+  return Promise.race([p, timer]).finally(() => clearTimeout(t))
+}
+
 const FINDINGS = {
   type: 'object', additionalProperties: false,
   // `reviewer` is NOT required: the agent isn't prompted to emit it and the pipeline
@@ -201,9 +213,9 @@ const reviewers = [
 // as it completes (no barrier between stages).
 const results = await pipeline(
   reviewers,
-  r => agent(r.prompt, Object.assign({ label: `review:${r.name}`, phase: 'Review', schema: FINDINGS }, r.model ? { model: r.model } : {}))
+  r => withTimeout(agent(r.prompt, Object.assign({ label: `review:${r.name}`, phase: 'Review', schema: FINDINGS }, r.model ? { model: r.model } : {})), `review:${r.name}`)
         .then(x => ({ ...x, reviewer: x.reviewer || r.name }))
-        .catch(() => ({ reviewer: r.name, ran_ok: false, note: 'agent error', findings: [] })),
+        .catch((e) => ({ reviewer: r.name, ran_ok: false, note: 'agent error: ' + (e && e.message || e), findings: [] })),
   rev => {
     if (!rev || !rev.ran_ok) {
       // reviewer genuinely failed (no review produced) — drop from quorum
@@ -214,12 +226,12 @@ const results = await pipeline(
       // still counts toward quorum; nothing to verify
       return { reviewer: rev.reviewer, ran_ok: true, note: rev.note, verified: [] }
     }
-    return agent(verifyPrompt(rev), { label: `verify:${rev.reviewer}`, phase: 'Verify', schema: VERIFIED, model: 'sonnet' })
+    return withTimeout(agent(verifyPrompt(rev), { label: `verify:${rev.reviewer}`, phase: 'Verify', schema: VERIFIED, model: 'sonnet' }), `verify:${rev.reviewer}`)
       .then(v => ({ ...v, reviewer: rev.reviewer, ran_ok: true }))
-      // Verifier crashed but the reviewer DID run: keep ran_ok=true, flag the
+      // Verifier crashed/timed out but the reviewer DID run: keep ran_ok=true, flag the
       // failure via note, and carry the unverified findings forward so they are
       // not silently lost (the skill surfaces them as unverified).
-      .catch(() => ({ reviewer: rev.reviewer, ran_ok: true, verified: [], findings: rev.findings, note: 'verifier agent failed; findings unverified' }))
+      .catch((e) => ({ reviewer: rev.reviewer, ran_ok: true, verified: [], findings: rev.findings, note: 'verifier agent failed (' + (e && e.message || e) + '); findings unverified' }))
   }
 )
 

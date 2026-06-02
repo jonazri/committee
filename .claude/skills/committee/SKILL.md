@@ -146,12 +146,11 @@ Invoke the `Workflow` tool with `name: "committee-review"`. **If it errors as no
   sessionDir, promptsDir,
   diffPath: "<SESSION_DIR>/diff.txt", diffStatPath: "<SESSION_DIR>/diff_stat.txt",
   staticPath: "<SESSION_DIR>/static.txt",
-  trust, reviewerModel,
-  userInput: "<raw /committee args>"
+  trust, reviewerModel
 }
 ```
 
-Substitute manifest values: `scopeType`=SCOPE_TYPE, `scopeDescription`=SCOPE_DESCRIPTION, `projectRoot`=PROJECT_ROOT, `promptsDir`=$PROMPTS_DIR (the install-resolved dir — the workflow loads every reviewer/verifier template from here, never from the repo under review), `sessionDir`=$SESSION_DIR, `baseSha`=BASE_SHA, `headSha`=HEAD_SHA, `commitSha`=COMMIT_SHA, `baseBranch`=BASE_BRANCH, `headBranch`=HEAD_BRANCH, `prNumber`=PR_NUMBER, `prBaseRef`=PR_BASE_REF, `specPath`=SPEC_PATH, `trust`=the recorded trust level, `reviewerModel`=the parsed `--reviewer-model` (omit if absent). Omit fields you don't have (e.g. `prNumber`/`prBaseRef`/`baseBranch` outside their scopes). The workflow defaults absent SHAs to `none` and `commitSha` to `N/A`, and accepts `args` whether the harness delivers it as an object or a JSON string. `userInput` is the raw, untrusted `/committee` args, passed through for context only (the workflow treats reviewer findings, not user input, as its injection surface).
+Substitute manifest values: `scopeType`=SCOPE_TYPE, `scopeDescription`=SCOPE_DESCRIPTION, `projectRoot`=PROJECT_ROOT, `promptsDir`=$PROMPTS_DIR (the install-resolved dir — the workflow loads every reviewer/verifier template from here, never from the repo under review), `sessionDir`=$SESSION_DIR, `baseSha`=BASE_SHA, `headSha`=HEAD_SHA, `commitSha`=COMMIT_SHA, `baseBranch`=BASE_BRANCH, `headBranch`=HEAD_BRANCH, `prNumber`=PR_NUMBER, `prBaseRef`=PR_BASE_REF, `specPath`=SPEC_PATH, `trust`=the recorded trust level, `reviewerModel`=the parsed `--reviewer-model` (omit if absent). Omit fields you don't have (e.g. `prNumber`/`prBaseRef`/`baseBranch` outside their scopes). The workflow defaults absent SHAs to `none` and `commitSha` to `N/A`, and accepts `args` whether the harness delivers it as an object or a JSON string.
 
 ## Failure modes
 
