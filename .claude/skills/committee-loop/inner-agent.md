@@ -60,6 +60,10 @@ Do NOT use `/committee` in iter-1 — its workflow includes Gemini and its own s
 
 **Iter-2+ — full mode.** Use `/committee --files <TARGET...> --trust=auto` (all 4 reviewers including Gemini). In multi-target runs, pass every `TARGET_FILES` entry as separate space-separated arguments after `--files`. Gemini's perspective joins once the file is already cleaner from iter-1 fixes, reducing noise. The `--trust=auto` flag is required in unattended sessions to skip the interactive trust dialog.
 
+<committee_no_return>
+**`/committee` MUST return a structured result before you may converge — a missing review is NOT a passing review.** `/committee` returns `{ quorum, degraded, perReviewer }`, which you ingest in step 3 to classify findings. If `/committee` does NOT return within ~20 minutes (well above its normal ~8–10 min — e.g. a reviewer/verifier agent wedged the workflow), the iteration is INCOMPLETE: do NOT treat it as `clean`, do NOT enter the end-pass, do NOT run `post.sh`. Instead — re-invoke `/committee` ONCE; if it still returns nothing, write `.committee-loop-BLOCKED.txt` (reason: `iter-<N> /committee did not return a result`) and STOP without emitting the promise. The watcher then reports BLOCKED and the worktree is preserved — far better than a false `DONE`/clean that silently drops the iteration's findings. (The workflow itself also self-bounds each reviewer/verifier agent at 2h; this is the loop-side guard for when the whole review still fails to come back.)
+</committee_no_return>
+
 <target_segmentation>
 Before dispatching `/committee` in iter-N (N≥2), filter `TARGET_FILES` to only those changed since the iter-(N−1) commit:
 
@@ -139,7 +143,7 @@ Only `.committee-loop-post.sh` actually runs after the fix; the others are moot 
 <convergence_exit>
 Any of these triggers runs the end-pass below (entry conditions are mutually exclusive — use the first that applies):
 
-<trigger name="clean">Zero Critical+Important findings this iteration. No CONVERGED.txt is written.</trigger>
+<trigger name="clean">A COMPLETED review (the iter-2+ `/committee` aggregate, or iter-1's reviewer set) returned zero Critical+Important findings this iteration. No CONVERGED.txt is written. A `/committee` that did not return is NOT a clean result — see `committee_no_return` above; never converge on a missing review.</trigger>
 
 <trigger name="reversal">A new iteration's fixes would REVERSE any prior-iteration change. Write `.committee-loop-CONVERGED.txt` naming the oscillator.</trigger>
 
