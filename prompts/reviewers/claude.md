@@ -43,7 +43,7 @@ git diff          # unstaged
 git diff --staged # staged
 ```
 
-> Note: This is committee's bundled Claude-reviewer template. The skill fills these placeholders and dispatches it to a `general-purpose` agent (committee owns this prompt rather than depending on any plugin-provided `code-reviewer` agent type, which is not guaranteed to exist). It produces Strengths/Issues/Assessment format; the coordinator's synthesis template uses Critical/Important/Minor — the verifier handles normalization between the two.
+> Note: This is committee's bundled Claude-reviewer template, dispatched by the `committee-review` workflow to a built-in `general-purpose` agent (committee owns this prompt rather than depending on any plugin-provided `code-reviewer` agent type, which is not guaranteed to exist). Under the workflow the agent returns **structured findings** (severity/file/title/detail), so the markdown Output Format below is superseded; the verifier and skill handle severity normalization and synthesis.
 
 ## Review Checklist
 
