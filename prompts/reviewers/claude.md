@@ -110,5 +110,6 @@ git diff --staged # staged
 - Mark nitpicks as Critical
 - Raise a third-party SDK/API-surface claim (call signature, accepted argument/content shape, response accessor, "this option/format is rejected") as Critical from memory — verify against the pinned version's installed types/docs first, or downgrade to a note; these are a frequent false-Critical source
 - Give feedback on code you didn't review
+- Execute the repo's own scripts or any state-changing command (install/setup/deploy/build/migration scripts, task runners) — even to verify a claim; reason by reading, not by running
 - Be vague ("improve error handling")
 - Avoid giving a clear verdict
