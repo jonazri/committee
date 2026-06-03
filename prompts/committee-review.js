@@ -21,31 +21,6 @@ const headSha = a.headSha || 'none'
 const commitSha = a.commitSha || 'N/A'
 const projectRoot = a.projectRoot || '.'
 
-// ── Operator model overrides ────────────────────────────────────────────────
-// All optional; absent/invalid → committee's default. Model ids and effort levels are
-// sanitized to a safe token charset and interpolated RAW (never shq'd) so codex's `-c`/`-m`
-// and gemini's `-m` parsers see clean values — a value failing the charset is dropped (so a
-// malicious diff that reached the args could never inject shell via an override). Effort is
-// only honorable where the invocation exposes it: Codex (`model_reasoning_effort`) and the
-// inner loop-agent (spawn `--effort`). The in-workflow Claude reviewer / verifier / Gemini have
-// no per-agent effort knob, so only their MODEL is overridable here (`reviewerModel`/etc).
-const safeTok = (s, re) => (typeof s === 'string' && re.test(s) ? s : null)
-const MODEL_RE = /^[A-Za-z0-9._-]+$/
-const codexEffort = safeTok(a.codexEffort, /^[a-z]+$/) || 'high'
-const codexModel = safeTok(a.codexModel, MODEL_RE)
-const codexCfg = `-c model_reasoning_effort=${codexEffort}${codexModel ? ` -c model=${codexModel}` : ''}`
-const geminiModel = safeTok(a.geminiModel, MODEL_RE)             // primary gemini pin (default: unpinned)
-const geminiPrimaryPin = geminiModel ? `-m ${geminiModel} ` : ''
-const geminiPrimaryBucket = geminiModel || 'default'
-const geminiProModel = safeTok(a.geminiProModel, MODEL_RE) || 'gemini-3.1-pro-preview'
-const verifierModel = safeTok(a.verifierModel, MODEL_RE) || 'sonnet'
-// Reviewer subset allowlist (canonical lowercase names: claude/codex/kiro/gemini/gemini-pro).
-// Absent or empty → all five. An allowlist that matches none is ignored (a no-reviewer run is
-// never useful) with a logged warning.
-const enabledSet = Array.isArray(a.enabledReviewers) && a.enabledReviewers.length
-  ? new Set(a.enabledReviewers.map(s => String(s).toLowerCase()))
-  : null
-
 // Shell-quote a value for safe interpolation into a shell command: wrap in single
 // quotes and escape any embedded single-quote as the POSIX '\'' idiom. Used for every
 // path/branch that reaches a shell (a repo cloned under e.g. /home/o'reilly would
@@ -67,6 +42,40 @@ const errMsg = (e) => (e && e.message) || e
 if (!a.sessionDir || !a.promptsDir) {
   throw new Error('committee-review: missing required arg(s): ' + [!a.sessionDir && 'sessionDir', !a.promptsDir && 'promptsDir'].filter(Boolean).join(', '))
 }
+
+// ── Operator model overrides ────────────────────────────────────────────────
+// All optional; absent/invalid → committee's default. Model ids and effort levels are
+// sanitized to a safe token charset and interpolated RAW (never shq'd) so codex's `-c`/`-m`
+// and gemini's `-m` parsers see clean values — a value failing the charset is dropped (so a
+// malicious diff that reached the args could never inject shell via an override). Effort is
+// only honorable where the invocation exposes it: Codex (`model_reasoning_effort`) and the
+// inner loop-agent (spawn `--effort`). The in-workflow Claude reviewer / verifier / Gemini have
+// no per-agent effort knob, so only their MODEL is overridable here (`reviewerModel`/etc).
+const safeTok = (s, re) => (typeof s === 'string' && re.test(s) ? s : null)
+const MODEL_RE = /^[A-Za-z0-9._-]+$/
+// Effort levels are lowercase enums (minimal/low/medium/high/xhigh) — stricter than MODEL_RE
+// on purpose; spawn.sh's --models validator enforces the same lowercase charset at entry so a
+// bad value fails fast there instead of silently degrading here.
+const codexEffort = safeTok(a.codexEffort, /^[a-z]+$/) || 'high'
+const codexModel = safeTok(a.codexModel, MODEL_RE)
+const codexCfg = `-c model_reasoning_effort=${codexEffort}${codexModel ? ` -c model=${codexModel}` : ''}`
+// Gemini pins are dq()'d at construction: MODEL_RE already guarantees no shell metacharacters,
+// but the pin lands inside a double-quoted segment of geminiCall — same future-proofing the
+// bucket arg gets, so a later MODEL_RE relaxation cannot quietly open shell injection.
+const geminiModel = safeTok(a.geminiModel, MODEL_RE)             // primary gemini pin (default: unpinned)
+const geminiPrimaryPin = geminiModel ? `-m ${dq(geminiModel)} ` : ''
+const geminiPrimaryBucket = geminiModel || 'default'
+const geminiProModel = safeTok(a.geminiProModel, MODEL_RE) || 'gemini-3.1-pro-preview'
+// The verifier is always dispatched as a Claude agent, so only Claude tier aliases are valid —
+// a charset-valid non-Claude id (e.g. gpt-5.5) would pass MODEL_RE and then fail at agent()
+// dispatch time; constraining here degrades it to the default instead.
+const verifierModel = safeTok(a.verifierModel, /^(opus|sonnet|haiku)$/) || 'sonnet'
+// Reviewer subset allowlist (canonical lowercase names: claude/codex/kiro/gemini/gemini-pro).
+// Absent or empty → all five. An allowlist that matches none is ignored (a no-reviewer run is
+// never useful) with a logged warning.
+const enabledSet = Array.isArray(a.enabledReviewers) && a.enabledReviewers.length
+  ? new Set(a.enabledReviewers.map(s => String(s).toLowerCase()))
+  : null
 
 // Cap every reviewer/verifier agent() at 2h. A model brownout that leaves an agent neither
 // resolving nor rejecting would otherwise wedge `await pipeline()` forever; this makes it
@@ -287,7 +296,7 @@ Parse the output into findings (note in your result if the flash fallback produc
 // collide with the concurrent Gemini reviewer.
 const geminiProPrompt = `Run the Gemini CLI pinned to the latest pro model for an independent review. Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
 Pinned to ${geminiProModel} (the latest Gemini pro by default; operator-overridable). Do NOT add a flash fallback — falling back would defeat the latest-pro perspective; on a capacity/quota 429 this reviewer drops and the other four hold quorum. The call carries a cross-session quota guard (~/.gemini/.committee-quota-until-${geminiProModel}): a known-exhausted quota window is skipped instantly instead of churning to the 300s timeout. Run as ONE Bash invocation with a 300000 ms timeout (copy the block verbatim):
-  cd ${shq(projectRoot)} && { ${geminiGuarded(`-m ${geminiProModel} `, 'gemini-pro', geminiProModel)}; }
+  cd ${shq(projectRoot)} && { ${geminiGuarded(`-m ${dq(geminiProModel)} `, 'gemini-pro', geminiProModel)}; }
 ${specNote}
 ${staticNote}
 Parse the output into findings. If it errors, is skipped, or returns nothing, set ran_ok=false with the reason from gemini-pro.err (include the quota-reset time when present).`
@@ -319,6 +328,7 @@ if (enabledSet) {
   if (filtered.length) {
     reviewers = filtered
     if (dropped.length) log(`committee: operator subset — running ${filtered.map(r => r.name).join(', ')}; skipped ${dropped.join(', ')}`)
+    if (filtered.length < 2) log(`committee: WARNING — operator subset leaves ${filtered.length} reviewer(s); the 2-reviewer quorum cannot be met and the result will report degraded:true`)
   } else {
     log(`committee: enabledReviewers [${[...enabledSet].join(', ')}] matched no reviewer — ignoring the allowlist and running all five`)
   }

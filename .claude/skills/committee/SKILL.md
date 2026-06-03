@@ -38,12 +38,12 @@ Parse the user's argument (if any) into one of these scopes:
 
 - `--reviewer-model=<model>` (one of `opus`, `sonnet`, `haiku`) overrides the Claude reviewer's model. Parse it out of the args, pass it through to the workflow as `reviewerModel` in the `args` object below, and do NOT include it in the `prepare.sh` invocation. Defaults to the harness's default model if absent. Used by `committee-loop` in iter-3+ to trade Opus depth for Sonnet speed once most Critical/Important findings have surfaced.
 
-- **Operator model overrides** (all optional; absent = committee default; none go to `prepare.sh`). Parse each and pass it through to the workflow `args` under the named key. The workflow sanitizes every value to `[A-Za-z0-9._-]` and drops anything invalid, so a bad value silently falls back to the default rather than erroring.
+- **Operator model overrides** (all optional; absent = committee default; none go to `prepare.sh`). Parse each and pass it through to the workflow `args` under the named key. The workflow sanitizes model ids to `[A-Za-z0-9._-]`, effort levels to lowercase letters only (they are enums: `minimal|low|medium|high|xhigh`), and the verifier model to `opus|sonnet|haiku` (it is always a Claude agent) — anything invalid silently falls back to the default rather than erroring.
   - `--codex-model=<id>` → `codexModel` (e.g. `gpt-5.5`; default: codex CLI's configured model)
-  - `--codex-effort=<level>` → `codexEffort` (e.g. `xhigh`; default `high`)
+  - `--codex-effort=<level>` → `codexEffort` (lowercase, e.g. `xhigh`; default `high`)
   - `--gemini-model=<id>` → `geminiModel` (pins the primary Gemini reviewer; default: unpinned, with a flash fallback — pinning disables that fallback)
   - `--gemini-pro-model=<id>` → `geminiProModel` (default `gemini-3.1-pro-preview`)
-  - `--verifier-model=<model>` → `verifierModel` (default `sonnet`)
+  - `--verifier-model=opus|sonnet|haiku` → `verifierModel` (default `sonnet`)
   - `--reviewers=<csv>` → `enabledReviewers` (a `,`-separated allowlist from `claude,codex,kiro,gemini,gemini-pro`; runs ONLY those. Split on `,`, lowercase each, pass as a JSON array. Absent = all five.)
 
   Effort is only honorable where the invocation exposes it: `--codex-effort` (Codex) and, in committee-loop, the inner-agent's spawn `--effort`. The in-workflow Claude reviewer / verifier / Gemini reviewers expose no per-agent effort knob, so only their **model** is overridable here. These are primarily driven by `committee-loop`'s operator model-override config (`.committee-loop-models.json`); a human can also pass them to a one-shot `/committee`.

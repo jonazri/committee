@@ -29,7 +29,7 @@ trap 'cleanup_on_error 130' INT TERM HUP QUIT
 # ---- Preflight: args, targets, tools, skills, git identity ----
 
 [ "$#" -gt 0 ] || {
-  echo "usage: $(basename -- "$0") <target-file> [<target-file> ...]" >&2
+  echo "usage: $(basename -- "$0") [--models '<json>'] <target-file> [<target-file> ...]" >&2
   echo "       paths must be repo-relative (resolved against origin's repo root)" >&2
   exit 1
 }
@@ -83,13 +83,22 @@ if [ -n "$MODELS_JSON" ]; then
     let cfg; try { cfg = JSON.parse(process.env.MODELS_JSON) } catch (e) { console.error("--models is not valid JSON: " + e.message); process.exit(1) }
     if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) { console.error("--models must be a JSON object"); process.exit(1) }
     const chk = (v, n) => { if (v != null && !(typeof v === "string" && TOK.test(v))) { console.error("invalid " + n + ": " + JSON.stringify(v) + " (allowed chars: A-Z a-z 0-9 . _ -)"); process.exit(1) } };
-    const ia = cfg.innerAgent || {}; chk(ia.model, "innerAgent.model"); chk(ia.effort, "innerAgent.effort");
+    // Effort levels are lowercase enums (minimal/low/medium/high/xhigh). The committee-review
+    // workflow sanitizes efforts with the SAME lowercase charset, so enforcing it here makes a
+    // bad value fail fast at spawn instead of silently degrading to the default mid-run.
+    const EFF = /^[a-z]+$/;
+    const chkEff = (v, n) => { if (v != null && !(typeof v === "string" && EFF.test(v))) { console.error("invalid " + n + ": " + JSON.stringify(v) + " (effort levels are lowercase, e.g. high, xhigh)"); process.exit(1) } };
+    const ia = cfg.innerAgent || {}; chk(ia.model, "innerAgent.model"); chkEff(ia.effort, "innerAgent.effort");
     const rv = cfg.reviewers || {};
     if (typeof rv !== "object" || Array.isArray(rv)) { console.error("reviewers must be a JSON object"); process.exit(1) }
     const known = ["claude","codex","kiro","gemini","gemini-pro"];
     for (const [k, s0] of Object.entries(rv)) {
       if (!known.includes(k.toLowerCase())) { console.error("unknown reviewer key: " + k + " (expected one of " + known.join(", ") + ")"); process.exit(1) }
-      const s = s0 || {}; chk(s.model, "reviewers." + k + ".model"); chk(s.effort, "reviewers." + k + ".effort");
+      // NOTE: reviewers.claude.model is validated here but reaches the workflow INDIRECTLY —
+      // the inner agent translates it into /committee --reviewer-model=<v> (-> reviewerModel),
+      // unlike codex/gemini fields which map 1:1 onto workflow args. See inner-agent.md
+      // <operator_model_overrides>.
+      const s = s0 || {}; chk(s.model, "reviewers." + k + ".model"); chkEff(s.effort, "reviewers." + k + ".effort");
       if (s.enabled != null && typeof s.enabled !== "boolean") { console.error("reviewers." + k + ".enabled must be true/false"); process.exit(1) }
       if (s.policy != null && !["pin","adaptive"].includes(s.policy)) { console.error("reviewers." + k + ".policy must be \"pin\" or \"adaptive\""); process.exit(1) }
     }
