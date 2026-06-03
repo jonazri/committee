@@ -67,7 +67,27 @@ done < <(find "${SEARCH_ROOTS[@]}" -type d -name committee-loop 2>/dev/null)
 bash "$SKILL_DIR/spawn.sh" <path1> [<path2> ...]
 ```
 
-`spawn.sh` handles preflight (tool checks, skill checks, realpath/git version probes, git identity), creates a sibling-dir worktree + committee-loop branch, seeds the worktree with the current origin bytes (including uncommitted edits), generates `.committee-loop-post.sh` / `.committee-loop-watcher.sh` / `.committee-loop-health-check.sh` / `.committee-loop-instructions.md` / `.committee-loop-prompt.txt` in the worktree, spawns the detached `tmux` session running `claude --dangerously-skip-permissions --effort high`, pastes the ralph-loop prompt, and emits a manifest on stdout.
+<operator_model_overrides>
+If the user's request specifies model choices for this run — e.g. *"only use opus 4.8 with xhigh and gpt 5.5 xhigh"*, *"run codex on xhigh"*, *"skip kiro and gemini"*, *"verify with opus"* — translate that into a JSON config and pass it as `--models '<json>'` (before or among the path args): `bash "$SKILL_DIR/spawn.sh" --models '<json>' <path1> ...`. Schema (every field optional; omit anything not requested):
+
+```json
+{
+  "innerAgent": { "model": "opus", "effort": "xhigh" },
+  "reviewers": {
+    "claude":     { "model": "opus", "policy": "pin" },
+    "codex":      { "model": "gpt-5.5", "effort": "xhigh" },
+    "kiro":       { "enabled": false },
+    "gemini":     { "model": "gemini-2.5-pro" },
+    "gemini-pro": { "model": "gemini-3.1-pro-preview" }
+  },
+  "verifier": { "model": "sonnet" }
+}
+```
+
+Honest capability limits to respect when translating: **effort** is only honorable for `innerAgent.effort` (the orchestrator's `--effort`) and `reviewers.codex.effort` (`model_reasoning_effort`); the in-workflow Claude reviewer, verifiers, and Gemini reviewers expose no per-agent effort knob, so for those set only `model`. `reviewers.claude.policy: "pin"` (the default when a claude model is set) freezes the loop's adaptive iter-3 Sonnet step-down + auto-re-escalation to that model; `"adaptive"` keeps the adaptive logic. Values must be `[A-Za-z0-9._-]` (model ids / effort levels); `spawn.sh` validates the JSON and fails fast on a bad value. Use `model: "opus"` for "opus 4.8" (the current Opus). If the user gives no model preferences, omit `--models` entirely (committee defaults).
+</operator_model_overrides>
+
+`spawn.sh` handles preflight (tool checks, skill checks, realpath/git version probes, git identity), creates a sibling-dir worktree + committee-loop branch, seeds the worktree with the current origin bytes (including uncommitted edits), generates `.committee-loop-post.sh` / `.committee-loop-watcher.sh` / `.committee-loop-health-check.sh` / `.committee-loop-instructions.md` / `.committee-loop-prompt.txt` (and `.committee-loop-models.json` when `--models` is given) in the worktree, spawns the detached `tmux` session running `claude --dangerously-skip-permissions --effort high` (the model/effort overridable via `innerAgent` in `--models`), pastes the ralph-loop prompt, and emits a manifest on stdout.
 
 On any failure between worktree creation and the tmux spawn, `spawn.sh`'s trap unwinds the worktree + branch so nothing leaks.
 

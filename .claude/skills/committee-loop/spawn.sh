@@ -48,6 +48,57 @@ case "$ORIGIN_PATH" in
     echo "committee-loop requires the repo path to match [a-zA-Z0-9._/-] only — rename or move the repo." >&2
     exit 1 ;;
 esac
+# Optional operator model-override config: `--models '<json>'` (or `--models=<json>`) anywhere
+# among the positional target paths. Everything else stays a target path. Validated NOW (before
+# any worktree cost) and the inner-agent launch flags (`innerAgent.model`/`effort`) are derived
+# here; the JSON itself is written into the worktree as `.committee-loop-models.json` after the
+# worktree exists, for the inner agent to read each iteration.
+MODELS_JSON=""
+INNER_LAUNCH_EXTRA="--effort high"   # default; --effort high is the loop-agent sweet spot
+declare -a POSITIONAL=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --models) MODELS_JSON="${2-}"; shift 2 || { echo "--models requires a JSON argument" >&2; exit 1; } ;;
+    --models=*) MODELS_JSON="${1#--models=}"; shift ;;
+    --) shift; while [ "$#" -gt 0 ]; do POSITIONAL+=( "$1" ); shift; done ;;
+    -*) echo "unknown option: $1" >&2; exit 1 ;;
+    *) POSITIONAL+=( "$1" ); shift ;;
+  esac
+done
+set -- "${POSITIONAL[@]}"
+[ "$#" -gt 0 ] || {
+  echo "usage: $(basename -- "$0") [--models '<json>'] <target-file> [<target-file> ...]" >&2
+  echo "       no target file paths given (after option parsing)" >&2
+  exit 1
+}
+
+if [ -n "$MODELS_JSON" ]; then
+  # node is a hard transitive dep (codex/gemini CLIs are node packages), but only required when
+  # --models is used; validate the JSON + derive the inner-agent launch flags here so a bad
+  # config fails before the worktree is created. Model/effort tokens that reach the tmux `claude`
+  # command MUST be charset-safe (committee-review.js separately sanitizes the reviewer tokens).
+  command -v node >/dev/null 2>&1 || { echo "--models requires 'node' on PATH to validate the JSON" >&2; exit 1; }
+  INNER_LAUNCH_EXTRA=$(MODELS_JSON="$MODELS_JSON" node -e '
+    const TOK=/^[A-Za-z0-9._-]+$/;
+    let cfg; try { cfg = JSON.parse(process.env.MODELS_JSON) } catch (e) { console.error("--models is not valid JSON: " + e.message); process.exit(1) }
+    if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) { console.error("--models must be a JSON object"); process.exit(1) }
+    const chk = (v, n) => { if (v != null && !(typeof v === "string" && TOK.test(v))) { console.error("invalid " + n + ": " + JSON.stringify(v) + " (allowed chars: A-Z a-z 0-9 . _ -)"); process.exit(1) } };
+    const ia = cfg.innerAgent || {}; chk(ia.model, "innerAgent.model"); chk(ia.effort, "innerAgent.effort");
+    const rv = cfg.reviewers || {};
+    if (typeof rv !== "object" || Array.isArray(rv)) { console.error("reviewers must be a JSON object"); process.exit(1) }
+    const known = ["claude","codex","kiro","gemini","gemini-pro"];
+    for (const [k, s0] of Object.entries(rv)) {
+      if (!known.includes(k.toLowerCase())) { console.error("unknown reviewer key: " + k + " (expected one of " + known.join(", ") + ")"); process.exit(1) }
+      const s = s0 || {}; chk(s.model, "reviewers." + k + ".model"); chk(s.effort, "reviewers." + k + ".effort");
+      if (s.enabled != null && typeof s.enabled !== "boolean") { console.error("reviewers." + k + ".enabled must be true/false"); process.exit(1) }
+      if (s.policy != null && !["pin","adaptive"].includes(s.policy)) { console.error("reviewers." + k + ".policy must be \"pin\" or \"adaptive\""); process.exit(1) }
+    }
+    const ver = cfg.verifier || {}; chk(ver.model, "verifier.model");
+    const eff = ia.effort || "high", mdl = ia.model || "";
+    process.stdout.write("--effort " + eff + (mdl ? " --model " + mdl : ""));
+  ') || exit 1
+fi
+
 TARGET_FILES=( "$@" )
 
 for i in "${!TARGET_FILES[@]}"; do
@@ -204,6 +255,13 @@ INSTRUCTIONS="$WORKTREE_PATH/.committee-loop-instructions.md"
   cat "$SCRIPT_DIR/inner-agent.md"
 } > "$INSTRUCTIONS"
 
+# Operator model-override config (validated during arg-parse). The inner agent reads this each
+# iteration and maps it onto the /committee flags + reviewer subset + policy-pin. The inner-agent
+# launch model/effort were already derived from it into INNER_LAUNCH_EXTRA.
+if [ -n "$MODELS_JSON" ]; then
+  printf '%s\n' "$MODELS_JSON" > "$WORKTREE_PATH/.committee-loop-models.json"
+fi
+
 RALPH_PROMPT="Read .committee-loop-instructions.md and follow it exactly. Review the target files named in that file using the phase-based workflow described, then iterate per the instructions until you emit the REVIEW CLEAN promise."
 # ralph-loop's slash-command template substitutes $ARGUMENTS UNQUOTED. No
 # backticks, no parens, no $, no quotes in RALPH_PROMPT.
@@ -298,8 +356,10 @@ printf '\n%s\n' "$RALPH_INVOCATION" >> "$PROMPT_FILE"
 # (that option crashes tmux 3.4 in clients_calculate_size and kills the server).
 # --effort high balances loop-agent discipline (ledger + verification steps)
 # against total wall-time. `max` rarely pays off for single-file reviews.
+# INNER_LAUNCH_EXTRA defaults to "--effort high" and is overridden by --models
+# innerAgent.{effort,model} (validated charset-safe during arg-parse).
 tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$WORKTREE_PATH" \
-  "claude --dangerously-skip-permissions --effort high"
+  "claude --dangerously-skip-permissions $INNER_LAUNCH_EXTRA"
 
 READY=false
 TRUST_DISMISSED=false
