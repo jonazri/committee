@@ -43,6 +43,40 @@ if (!a.sessionDir || !a.promptsDir) {
   throw new Error('committee-review: missing required arg(s): ' + [!a.sessionDir && 'sessionDir', !a.promptsDir && 'promptsDir'].filter(Boolean).join(', '))
 }
 
+// ── Operator model overrides ────────────────────────────────────────────────
+// All optional; absent/invalid → committee's default. Model ids and effort levels are
+// sanitized to a safe token charset and interpolated RAW (never shq'd) so codex's `-c`/`-m`
+// and gemini's `-m` parsers see clean values — a value failing the charset is dropped (so a
+// malicious diff that reached the args could never inject shell via an override). Effort is
+// only honorable where the invocation exposes it: Codex (`model_reasoning_effort`) and the
+// inner loop-agent (spawn `--effort`). The in-workflow Claude reviewer / verifier / Gemini have
+// no per-agent effort knob, so only their MODEL is overridable here (`reviewerModel`/etc).
+const safeTok = (s, re) => (typeof s === 'string' && re.test(s) ? s : null)
+const MODEL_RE = /^[A-Za-z0-9._-]+$/
+// Effort levels are lowercase enums (minimal/low/medium/high/xhigh) — stricter than MODEL_RE
+// on purpose; spawn.sh's --models validator enforces the same lowercase charset at entry so a
+// bad value fails fast there instead of silently degrading here.
+const codexEffort = safeTok(a.codexEffort, /^[a-z]+$/) || 'high'
+const codexModel = safeTok(a.codexModel, MODEL_RE)
+const codexCfg = `-c model_reasoning_effort=${codexEffort}${codexModel ? ` -c model=${codexModel}` : ''}`
+// Gemini pins are dq()'d at construction: MODEL_RE already guarantees no shell metacharacters,
+// but the pin lands inside a double-quoted segment of geminiCall — same future-proofing the
+// bucket arg gets, so a later MODEL_RE relaxation cannot quietly open shell injection.
+const geminiModel = safeTok(a.geminiModel, MODEL_RE)             // primary gemini pin (default: unpinned)
+const geminiPrimaryPin = geminiModel ? `-m ${dq(geminiModel)} ` : ''
+const geminiPrimaryBucket = geminiModel || 'default'
+const geminiProModel = safeTok(a.geminiProModel, MODEL_RE) || 'gemini-3.1-pro-preview'
+// The verifier is always dispatched as a Claude agent, so only Claude tier aliases are valid —
+// a charset-valid non-Claude id (e.g. gpt-5.5) would pass MODEL_RE and then fail at agent()
+// dispatch time; constraining here degrades it to the default instead.
+const verifierModel = safeTok(a.verifierModel, /^(opus|sonnet|haiku)$/) || 'sonnet'
+// Reviewer subset allowlist (canonical lowercase names: claude/codex/kiro/gemini/gemini-pro).
+// Absent or empty → all five. An allowlist that matches none is ignored (a no-reviewer run is
+// never useful) with a logged warning.
+const enabledSet = Array.isArray(a.enabledReviewers) && a.enabledReviewers.length
+  ? new Set(a.enabledReviewers.map(s => String(s).toLowerCase()))
+  : null
+
 // Cap every reviewer/verifier agent() at 2h. A model brownout that leaves an agent neither
 // resolving nor rejecting would otherwise wedge `await pipeline()` forever; this makes it
 // reject instead, so the existing .catch() degrades that reviewer to ran_ok:false (or carries
@@ -174,16 +208,16 @@ Ignore claude.md's "## Output Format" markdown report (Strengths/Issues/Assessme
 const codexPrompt = `Run the Codex CLI to review, then return its findings.
 ${staticNote}
 ${trust === 'read-only'
-  ? `Read-only: review the precomputed diff at ${a.diffPath}. Run with a 540 s shell timeout (600 s for files/plan):\n  cd ${shq(projectRoot)} && timeout ${(a.scopeType === 'files' || a.scopeType === 'plan') ? 600 : 540} codex exec -c model_reasoning_effort=high --sandbox read-only --ephemeral -o ${shq(a.sessionDir)}/codex.md - 2> ${shq(a.sessionDir)}/codex.err <<'P'\nRead and review the precomputed diff at ${a.diffPath}. Do not explore beyond it. Output Critical/Important/Minor with file:line.\nP`
+  ? `Read-only: review the precomputed diff at ${a.diffPath}. Run with a 540 s shell timeout (600 s for files/plan):\n  cd ${shq(projectRoot)} && timeout ${(a.scopeType === 'files' || a.scopeType === 'plan') ? 600 : 540} codex exec ${codexCfg} --sandbox read-only --ephemeral -o ${shq(a.sessionDir)}/codex.md - 2> ${shq(a.sessionDir)}/codex.err <<'P'\nRead and review the precomputed diff at ${a.diffPath}. Do not explore beyond it. Output Critical/Important/Minor with file:line.\nP`
   : `Run with a 540 s shell timeout (600 s for files/plan — codex may explore aux code). Each branch cd's to the project root and self-redirects (codex review captures stdout; codex exec writes via -o):\n  cd ${shq(projectRoot)} && ${a.scopeType === 'commit'
-        ? `timeout 540 codex review -c model_reasoning_effort=high --commit ${shq(commitSha)} > ${shq(a.sessionDir)}/codex.md 2> ${shq(a.sessionDir)}/codex.err${codexRecover}`
+        ? `timeout 540 codex review ${codexCfg} --commit ${shq(commitSha)} > ${shq(a.sessionDir)}/codex.md 2> ${shq(a.sessionDir)}/codex.err${codexRecover}`
         : a.scopeType === 'branch_diff'
-          ? `timeout 540 codex review -c model_reasoning_effort=high --base ${shq(a.baseBranch)} > ${shq(a.sessionDir)}/codex.md 2> ${shq(a.sessionDir)}/codex.err${codexRecover}`
+          ? `timeout 540 codex review ${codexCfg} --base ${shq(a.baseBranch)} > ${shq(a.sessionDir)}/codex.md 2> ${shq(a.sessionDir)}/codex.err${codexRecover}`
           : a.scopeType === 'uncommitted'
-            ? `timeout 540 codex review -c model_reasoning_effort=high --uncommitted > ${shq(a.sessionDir)}/codex.md 2> ${shq(a.sessionDir)}/codex.err${codexRecover}`
+            ? `timeout 540 codex review ${codexCfg} --uncommitted > ${shq(a.sessionDir)}/codex.md 2> ${shq(a.sessionDir)}/codex.err${codexRecover}`
             : (a.scopeType === 'files' || a.scopeType === 'plan')
-              ? `timeout 600 codex exec -c model_reasoning_effort=high --ephemeral -o ${shq(a.sessionDir)}/codex.md - 2> ${shq(a.sessionDir)}/codex.err <<'P'\nRead and review the file(s)/plan content at ${a.diffPath}. Review by READING only — do NOT execute the repo's scripts or any state-changing command (install/setup/deploy/build/migration scripts, task runners), even to verify feasibility. Output Critical/Important/Minor with file:line.\nP`
-              : `timeout 540 codex exec -c model_reasoning_effort=high --ephemeral -o ${shq(a.sessionDir)}/codex.md - 2> ${shq(a.sessionDir)}/codex.err <<'P'\nReview the changes between ${baseSha} and ${headSha}: run git diff --stat ${baseSha}..${headSha} then git diff ${baseSha}..${headSha}. Beyond those read-only git diff commands, review by READING only — do NOT execute the repo's scripts or any state-changing command (install/setup/deploy/build/migration scripts, task runners), even to verify feasibility. Output Critical/Important/Minor with file:line.\nP`}`}
+              ? `timeout 600 codex exec ${codexCfg} --ephemeral -o ${shq(a.sessionDir)}/codex.md - 2> ${shq(a.sessionDir)}/codex.err <<'P'\nRead and review the file(s)/plan content at ${a.diffPath}. Review by READING only — do NOT execute the repo's scripts or any state-changing command (install/setup/deploy/build/migration scripts, task runners), even to verify feasibility. Output Critical/Important/Minor with file:line.\nP`
+              : `timeout 540 codex exec ${codexCfg} --ephemeral -o ${shq(a.sessionDir)}/codex.md - 2> ${shq(a.sessionDir)}/codex.err <<'P'\nReview the changes between ${baseSha} and ${headSha}: run git diff --stat ${baseSha}..${headSha} then git diff ${baseSha}..${headSha}. Beyond those read-only git diff commands, review by READING only — do NOT execute the repo's scripts or any state-changing command (install/setup/deploy/build/migration scripts, task runners), even to verify feasibility. Output Critical/Important/Minor with file:line.\nP`}`}
 IMPORTANT: \`codex review\` writes its ENTIRE output — including the final review — to STDERR, not stdout. After it runs, on a clean exit, if ${a.sessionDir}/codex.md is empty but ${a.sessionDir}/codex.err is non-empty, the review is in codex.err — read that. (codex exec writes its -o file directly and needs no recovery.) If codex exited non-zero with no review, set ran_ok=false with the reason. Parse the review into findings.`
 
 const kiroPrompt = `Run the Kiro CLI to review. Read ${a.promptsDir}/reviewers/kiro.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
@@ -242,9 +276,11 @@ const geminiGuarded = (modelPin, outBase, bucket) => {
   return `q="$HOME/.gemini/.committee-quota-until-${b}"; if [ -f "$q" ] && [ "$(date +%s)" -lt "$(cat "$q" 2>/dev/null || echo 0)" ]; then echo "skipped: gemini quota (${b}) exhausted until $(date -d @"$(cat "$q")" +%H:%M:%S 2>/dev/null || cat "$q")" > ${err}; else ${geminiCall(modelPin, outBase)}; if [ ! -s ${md} ] && grep -q 'quota will reset after' ${err}; then s=$(grep -o 'reset after [0-9hms ]*' ${err} | head -1 | ${quotaParse}); [ "$s" -gt 0 ] 2>/dev/null && { mkdir -p "$(dirname "$q")" 2>/dev/null; echo $(( $(date +%s) + s )) > "$q"; }; fi; fi`
 }
 const geminiPrompt = `Run the Gemini CLI to review. Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
-The primary call passes no -m pin; if it produces an empty file (capacity 429 — gemini-cli's built-in fallback is interactive-only and does NOT cover this headless call), a flash-pinned retry runs automatically. Both calls carry a cross-session quota guard: a bucket recorded as exhausted under ~/.gemini/.committee-quota-until-* is skipped instantly instead of churning to the 300s timeout, and a fresh "quota will reset after" error records the new deadline for every other session. Run as ONE Bash invocation with a 300000 ms timeout (copy the block verbatim):
-  cd ${shq(projectRoot)} && { ${geminiGuarded('', 'gemini', 'default')}; }
-  [ -s ${shq(a.sessionDir)}/gemini.md ] || { ${geminiGuarded('-m gemini-2.5-flash ', 'gemini', 'gemini-2.5-flash')}; }
+${geminiModel
+  ? `The primary call is pinned to ${geminiModel} (operator override); there is NO flash fallback when an explicit model is pinned (a fallback would defeat the override). It carries a cross-session quota guard: a bucket recorded as exhausted under ~/.gemini/.committee-quota-until-* is skipped instantly instead of churning to the 300s timeout, and a fresh "quota will reset after" error records the new deadline for every other session. Run as ONE Bash invocation with a 300000 ms timeout (copy the block verbatim):`
+  : `The primary call passes no -m pin; if it produces an empty file (capacity 429 — gemini-cli's built-in fallback is interactive-only and does NOT cover this headless call), a flash-pinned retry runs automatically. Both calls carry a cross-session quota guard: a bucket recorded as exhausted under ~/.gemini/.committee-quota-until-* is skipped instantly instead of churning to the 300s timeout, and a fresh "quota will reset after" error records the new deadline for every other session. Run as ONE Bash invocation with a 300000 ms timeout (copy the block verbatim):`}
+  cd ${shq(projectRoot)} && { ${geminiGuarded(geminiPrimaryPin, 'gemini', geminiPrimaryBucket)}; }${geminiModel ? '' : `
+  [ -s ${shq(a.sessionDir)}/gemini.md ] || { ${geminiGuarded('-m gemini-2.5-flash ', 'gemini', 'gemini-2.5-flash')}; }`}
 ${specNote}
 ${staticNote}
 Parse the output into findings (note in your result if the flash fallback produced them). If gemini.md is still empty/absent after both calls, set ran_ok=false with the reason from gemini.err (a "skipped: gemini quota ... until HH:MM:SS" line or the API error).`
@@ -259,8 +295,8 @@ Parse the output into findings (note in your result if the flash fallback produc
 // instead of churning 300s into a guaranteed 429). Writes its OWN gemini-pro.md/.err so it cannot
 // collide with the concurrent Gemini reviewer.
 const geminiProPrompt = `Run the Gemini CLI pinned to the latest pro model for an independent review. Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
-Pinned to gemini-3.1-pro-preview (the latest Gemini pro). Do NOT add a flash fallback — falling back would defeat the latest-pro perspective; on a capacity/quota 429 this reviewer drops and the other four hold quorum. The call carries a cross-session quota guard (~/.gemini/.committee-quota-until-gemini-3.1-pro-preview): a known-exhausted quota window is skipped instantly instead of churning to the 300s timeout. Run as ONE Bash invocation with a 300000 ms timeout (copy the block verbatim):
-  cd ${shq(projectRoot)} && { ${geminiGuarded('-m gemini-3.1-pro-preview ', 'gemini-pro', 'gemini-3.1-pro-preview')}; }
+Pinned to ${geminiProModel} (the latest Gemini pro by default; operator-overridable). Do NOT add a flash fallback — falling back would defeat the latest-pro perspective; on a capacity/quota 429 this reviewer drops and the other four hold quorum. The call carries a cross-session quota guard (~/.gemini/.committee-quota-until-${geminiProModel}): a known-exhausted quota window is skipped instantly instead of churning to the 300s timeout. Run as ONE Bash invocation with a 300000 ms timeout (copy the block verbatim):
+  cd ${shq(projectRoot)} && { ${geminiGuarded(`-m ${dq(geminiProModel)} `, 'gemini-pro', geminiProModel)}; }
 ${specNote}
 ${staticNote}
 Parse the output into findings. If it errors, is skipped, or returns nothing, set ran_ok=false with the reason from gemini-pro.err (include the quota-reset time when present).`
@@ -276,13 +312,27 @@ ${JSON.stringify(rev.findings || [], null, 2)}`
 }
 
 phase('Review')
-const reviewers = [
+const allReviewers = [
   { name: 'Claude', prompt: claudePrompt, model: a.reviewerModel },
   { name: 'Codex', prompt: codexPrompt },
   { name: 'Kiro', prompt: kiroPrompt },
   { name: 'Gemini', prompt: geminiPrompt },
   { name: 'Gemini-Pro', prompt: geminiProPrompt },
 ]
+// Apply the operator reviewer-subset allowlist. An allowlist that matches none is ignored
+// (running zero reviewers is never useful) and the full panel runs, with a logged warning.
+let reviewers = allReviewers
+if (enabledSet) {
+  const filtered = allReviewers.filter(r => enabledSet.has(r.name.toLowerCase()))
+  const dropped = allReviewers.filter(r => !enabledSet.has(r.name.toLowerCase())).map(r => r.name)
+  if (filtered.length) {
+    reviewers = filtered
+    if (dropped.length) log(`committee: operator subset — running ${filtered.map(r => r.name).join(', ')}; skipped ${dropped.join(', ')}`)
+    if (filtered.length < 2) log(`committee: WARNING — operator subset leaves ${filtered.length} reviewer(s); the 2-reviewer quorum cannot be met and the result will report degraded:true`)
+  } else {
+    log(`committee: enabledReviewers [${[...enabledSet].join(', ')}] matched no reviewer — ignoring the allowlist and running all five`)
+  }
+}
 
 // pipeline() fans stage-1 (review) out across all reviewers concurrently — this IS
 // the spec's "parallel() Review" — then streams each reviewer into stage-2 (verify)
@@ -302,7 +352,7 @@ const results = await pipeline(
       // still counts toward quorum; nothing to verify
       return { reviewer: rev.reviewer, ran_ok: true, note: rev.note, verified: [] }
     }
-    return withTimeout(agent(verifyPrompt(rev), { label: `verify:${rev.reviewer}`, phase: 'Verify', schema: VERIFIED, model: 'sonnet' }), `verify:${rev.reviewer}`)
+    return withTimeout(agent(verifyPrompt(rev), { label: `verify:${rev.reviewer}`, phase: 'Verify', schema: VERIFIED, model: verifierModel }), `verify:${rev.reviewer}`)
       .then(v => ({ ...v, reviewer: rev.reviewer, ran_ok: true }))
       // Verifier crashed/timed out but the reviewer DID run: keep ran_ok=true, flag the
       // failure via note, and carry the unverified findings forward so they are

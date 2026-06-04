@@ -63,7 +63,7 @@ c. `timeout 900 codex exec --skip-git-repo-check --sandbox read-only -c model_re
 
 Do NOT use `/committee` in iter-1 — its workflow includes Gemini and its own synthesis. Synthesize the three reports into a single Critical/Important/Minor list yourself.
 
-**Iter-2+ — full mode.** Use `/committee --files <TARGET...> --trust=auto` (all 5 reviewers, including both Gemini models). In multi-target runs, pass every `TARGET_FILES` entry as separate space-separated arguments after `--files`. Gemini's perspective joins once the file is already cleaner from iter-1 fixes, reducing noise. The `--trust=auto` flag is required in unattended sessions to skip the interactive trust dialog.
+**Iter-2+ — full mode.** Use `/committee --files <TARGET...> --trust=auto` (all 5 reviewers, including both Gemini models), plus any operator override flags from `<operator_model_overrides>` and the `--reviewer-model` from `<model_selection>`. In multi-target runs, pass every `TARGET_FILES` entry as separate space-separated arguments after `--files`. Gemini's perspective joins once the file is already cleaner from iter-1 fixes, reducing noise. The `--trust=auto` flag is required in unattended sessions to skip the interactive trust dialog.
 
 <committee_no_return>
 **`/committee` MUST return a structured result before you may converge — a missing review is NOT a passing review.** `/committee` returns `{ quorum, degraded, perReviewer }`, which you ingest in step 3 to classify findings. If `/committee` does NOT return within ~20 minutes (well above its normal ~8–10 min — e.g. a reviewer/verifier agent wedged the workflow), the iteration is INCOMPLETE: do NOT treat it as `clean`, do NOT enter the end-pass, do NOT run `post.sh`. Instead — re-invoke `/committee` ONCE; if it still returns nothing, write `.committee-loop-BLOCKED.txt` (reason: `iter-<N> /committee did not return a result`) and STOP without emitting the promise. The watcher then reports BLOCKED and the worktree is preserved — far better than a false `DONE`/clean that silently drops the iteration's findings. (The workflow itself also self-bounds each reviewer/verifier agent at 2h; this is the loop-side guard for when the whole review still fails to come back.)
@@ -82,7 +82,22 @@ base=$(git log --reverse --format='%H %s' | grep -E '^[0-9a-f]+ (fix|simplify) i
 If the filter yields ZERO files — or iter-(N−1) committed nothing, so `base` is empty — nothing changed since iter-(N−1); that IS the `clean` convergence trigger — go directly to step 6 convergence check without dispatching `/committee`.
 </target_segmentation>
 
+<operator_model_overrides>
+At the START of every iteration (and the end-pass), check for `.committee-loop-models.json` at the worktree root. If absent, skip this block entirely — committee defaults apply. If present, it is the operator's per-run model config (already validated at spawn; the `/committee` workflow re-sanitizes every value, so a stale/odd value degrades to a default rather than breaking the run). Read it and translate it into flags appended to EVERY `/committee` invocation this run — the iter-2+ full-mode call AND the end-pass call:
+
+- `reviewers.codex.model` → `--codex-model=<v>`; `reviewers.codex.effort` → `--codex-effort=<v>`
+- `reviewers.gemini.model` → `--gemini-model=<v>`
+- `reviewers["gemini-pro"].model` → `--gemini-pro-model=<v>`
+- `verifier.model` → `--verifier-model=<v>`
+- **Reviewer subset:** if ANY `reviewers.<name>.enabled` is `false`, build `--reviewers=<csv>` listing only the ENABLED reviewers (from `claude,codex,kiro,gemini,gemini-pro`; a reviewer with no entry or `enabled` omitted counts as enabled). Also honor it in iter-1 fast mode: skip a disabled reviewer among Claude/Kiro/Codex there (Gemini is already skipped in iter-1), and adjust the quorum note accordingly (a disabled reviewer is not a "miss"). If the allowlist would be empty, ignore it.
+- **`innerAgent.model`/`innerAgent.effort`** are NOT your concern — they were applied to your own launch at spawn time; you cannot change them mid-run.
+
+**Claude reviewer (interacts with `<model_selection>` below):** if `reviewers.claude.model` is set AND `reviewers.claude.policy` is `"pin"` (or `policy` is omitted — a set model defaults to pinned), the operator's choice is law: pass `--reviewer-model=<reviewers.claude.model>` on EVERY iteration (iter-1 baseline through end-pass) and SKIP the entire `<model_selection>` step-down/re-escalation logic. Only if `reviewers.claude.policy` is `"adaptive"` (or there is no `reviewers.claude.model`) does `<model_selection>` run as written. Note this choice in the ledger section header (e.g. `[opus pinned by operator]`).
+</operator_model_overrides>
+
 <model_selection>
+**First check `<operator_model_overrides>`: if the Claude reviewer is pinned, that fully replaces this block — do not run the step-down/re-escalation below.** Otherwise:
+
 You are a FRESH process each iteration with NO memory of prior iterations — so the reviewer-model choice MUST be derived from the durable ledger (`.committee-loop-decisions.md`), never from "what I did last time." Compute it mechanically at the start of step 2, in this order:
 
 1. **iter-1 / iter-2 → Opus.** Omit `--reviewer-model` entirely (harness default). The ledger architecture is still forming and the broadest review is worth the wall-time.
@@ -199,7 +214,7 @@ If only the current iteration had zero applies but iter-(N−1) had ≥1, run th
 </skip_check>
 
 1. Run `simplify` on the target with `model: "sonnet"` (same workflow as iter-1's simplify). Apply non-contentious fixes, commit as `simplify final: <summary>`. If nothing, no commit.
-2. Run a full committee pass (`/committee --files <TARGET...> --reviewer-model=sonnet --trust=auto` — all 5 reviewers including both Gemini models, Claude reviewer at Sonnet) using the section-3 and section-4 workflow (verifier dispatch, three gates, sequential apply). Commit applied fixes as `fix final: ...`. In multi-target runs, apply target segmentation here too — only pass files that changed since the last iteration's commit.
+2. Run a full committee pass (`/committee --files <TARGET...> --reviewer-model=sonnet --trust=auto` — all 5 reviewers including both Gemini models, Claude reviewer at Sonnet) using the section-3 and section-4 workflow (verifier dispatch, three gates, sequential apply). **Apply the operator override flags from `<operator_model_overrides>` here too** (subset, codex/gemini/verifier models, and — if the Claude reviewer is operator-pinned — `--reviewer-model=<pinned>` instead of `=sonnet`). Commit applied fixes as `fix final: ...`. In multi-target runs, apply target segmentation here too — only pass files that changed since the last iteration's commit.
 3. Run `bash .committee-loop-post.sh`.
 4. Create `.committee-loop-FINAL-PASS-DONE` (empty marker) AFTER post.sh returns. The flag only matters on the BLOCKED path where post.sh preserves the worktree and ralph-loop may re-feed the prompt; the flag suppresses redundant re-entry. On CLEAN, post.sh tears down the worktree + tmux session itself and the flag is moot. AFTER is the safe ordering: a crash between post.sh and flag-creation re-runs the final pass with consistent already-committed-or-BLOCKED state; the inverse ordering would let a crash between flag-creation and post.sh skip copy-back entirely.
 5. If `.committee-loop-BLOCKED.txt` now exists → STOP, do NOT emit the promise. Otherwise emit `<promise>REVIEW CLEAN</promise>`.

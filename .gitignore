@@ -1,3 +1,6 @@
 **/.DS_Store
 **/._.DS_Store
 .committee/
+
+# Claude Code harness runtime state
+.claude/scheduled_tasks.lock

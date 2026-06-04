@@ -37,6 +37,11 @@ Optional cross-scope flags (combine with any scope above):
 ```
 --trust=auto | --trust=read-only        # Pre-select CLI reviewer trust; skips the interactive dialog
 --reviewer-model=opus|sonnet|haiku      # Override the Claude reviewer's model (default: harness default)
+--codex-model=<id> --codex-effort=<lvl> # Override Codex's model / reasoning effort (default: codex config / high)
+--gemini-model=<id>                      # Pin the primary Gemini reviewer (default: unpinned + flash fallback)
+--gemini-pro-model=<id>                  # Override the 5th reviewer's pin (default: gemini-3.1-pro-preview)
+--verifier-model=opus|sonnet|haiku       # Override the per-reviewer verifier model (default: sonnet)
+--reviewers=claude,codex,...             # Allowlist: run ONLY these reviewers (default: all five)
 ```
 
 ## Project Structure
@@ -69,6 +74,8 @@ Note: all five reviewers run inside the `committee-review` workflow (`prompts/co
 **Reviewer parallelism** — the `committee-review` workflow dispatches all five reviewers (Claude as a `general-purpose` agent, the Codex/Kiro/Gemini CLIs, and a second Gemini pinned to `gemini-3.1-pro-preview` — the latest pro, no flash fallback, quota-guarded cross-session, writes its own `gemini-pro.md`) in parallel via `pipeline()`, then streams each reviewer into a per-reviewer verifier agent as soon as its review completes (no barrier between the Review and Verify stages). It returns `{ quorum, degraded, perReviewer }`; the skill synthesizes the Critical/Important/Minor report from that.
 
 **Arg delivery** — the skill invokes the workflow with an `args` object, but the harness may deliver it to the workflow as a JSON *string*; `committee-review.js` accepts either form (parses a string, uses an object as-is) and fails fast if `sessionDir`/`promptsDir` are missing.
+
+**Operator model overrides** — every committee member's model is overridable, with effort where the invocation exposes it. `committee-review.js` accepts optional args `reviewerModel` (Claude), `codexModel`/`codexEffort`, `geminiModel` (pinning the primary disables its flash fallback), `geminiProModel`, `verifierModel`, and `enabledReviewers` (a reviewer-subset allowlist) — model ids sanitized to `[A-Za-z0-9._-]`, effort levels to lowercase enums, the verifier model to `opus|sonnet|haiku` (invalid → default), and the gemini pins additionally `dq()`-escaped at construction, so a value reaching the workflow from an adversarial diff can't inject shell. **Effort is only controllable for Codex (`model_reasoning_effort`) and the committee-loop inner agent (spawn `--effort`)** — the in-workflow Claude reviewer / verifiers / Gemini reviewers have no per-agent effort knob, so only their model is settable. For one-shot `/committee` these come from the `--codex-model`/`--reviewers`/etc. flags. For `committee-loop`, the operator states model preferences in natural language; the skill translates them into `spawn.sh --models '<json>'`, which validates the JSON, applies `innerAgent.{model,effort}` to the detached `claude` launch, and writes `.committee-loop-models.json` into the worktree — the inner agent reads it each iteration and maps it onto the `/committee` flags + reviewer subset, with `reviewers.claude.policy: "pin"` (default when a claude model is set) freezing the adaptive Sonnet step-down/re-escalation, or `"adaptive"` keeping it.
 
 ## Known Limitations
 
