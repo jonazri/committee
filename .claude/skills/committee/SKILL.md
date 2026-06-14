@@ -128,6 +128,8 @@ Otherwise, call the `AskUserQuestion` tool with:
 - **Option 1** — `Auto Mode (Recommended)` — `Reviewers run autonomously with auto-approval flags (shell + tool access). The Claude reviewer inherits the parent session's auto-mode classifier; CLI reviewers (Kiro, Gemini) run with their own auto-approval flags. Matches the harness's auto permission mode.`
 - **Option 2** — `Read-only` — `Reviewers read the precomputed diff file only. No shell access. Safer for untrusted code.`
 
+**Note for plan scope:** if the scope is `plan` (`--plan`/`--spec`), the workflow forces read-only regardless of the answer here (a plan document is imperative instructions an auto-trust reviewer could execute) — so for plan scope this dialog does not change reviewer write access. You may still present it (harmless), or just tell the user plan reviews always run read-only.
+
 Record the answer as `auto` or `read-only`. Default to `auto` if unanswered or on tool failure.
 
 The value you record here is what you pass as the `trust` field in the workflow `args` object below (the **Dispatch the review workflow** section).
