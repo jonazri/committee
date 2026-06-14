@@ -25,7 +25,7 @@ const trust = a.scopeType === 'plan' ? 'read-only' : (a.trust === 'read-only' ? 
 const baseSha = a.baseSha || 'none'
 const headSha = a.headSha || 'none'
 const commitSha = a.commitSha || 'N/A'
-const projectRoot = a.projectRoot || '.'
+const projectRoot = a.projectRoot // required (guarded below): it scopes the Gemini reviewer's trusted workspace + read_file confinement, so a silent '.' default could trust/read the wrong tree
 
 // Shell-quote a value for safe interpolation into a shell command: wrap in single
 // quotes and escape any embedded single-quote as the POSIX '\'' idiom. Used for every
@@ -45,8 +45,8 @@ const errMsg = (e) => (e && e.message) || e
 // Fail fast with a clear message if the skill omitted an always-required arg, rather than
 // silently shq'ing `undefined` into the redirect paths and writing to a dir named
 // "undefined". (Scope-specific args like diffPath/baseBranch are validated where used.)
-if (!a.sessionDir || !a.promptsDir) {
-  throw new Error('committee-review: missing required arg(s): ' + [!a.sessionDir && 'sessionDir', !a.promptsDir && 'promptsDir'].filter(Boolean).join(', '))
+if (!a.sessionDir || !a.promptsDir || !a.projectRoot) {
+  throw new Error('committee-review: missing required arg(s): ' + [!a.sessionDir && 'sessionDir', !a.promptsDir && 'promptsDir', !a.projectRoot && 'projectRoot'].filter(Boolean).join(', '))
 }
 
 // ── Operator model overrides ────────────────────────────────────────────────
