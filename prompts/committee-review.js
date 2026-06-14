@@ -273,9 +273,12 @@ const geminiText = 'The artifact to review is fenced between <reviewed_content> 
 // re-arm write_file/run_shell_command via `tools.core` + `autoAccept:true` with NO -y — escalating a
 // "read-only" review to arbitrary writes/exec (reproduced). So in read-only mode we trust the
 // workspace (so the reviewer can read the diff + a referenced spec/code) AND pass a HIGHEST-
-// PRECEDENCE system settings file that hard-EXCLUDES the writing/exec tools and disables auto-accept
-// — which beats any workspace `tools.core`/`autoAccept` override (verified: READ=ok, WRITE/SHELL
-// blocked even against a hostile workspace settings file). GEMINI_CLI_TRUST_WORKSPACE is per-process
+// PRECEDENCE system settings file that hard-EXCLUDES the writing/exec tools (this is the load-bearing
+// control: `tools.exclude` wins over a workspace `tools.core`, verified READ=ok/WRITE=blocked even
+// against a hostile workspace settings file) plus `autoAccept:false` as belt-and-suspenders — though
+// the latter is best-effort/version-dependent (newer gemini-cli keys approval as
+// `general.defaultApprovalMode`), so the real guarantees are `tools.exclude` + the omitted `-y`.
+// GEMINI_CLI_TRUST_WORKSPACE is per-process
 // (does NOT persist to ~/.gemini/trustedFolders.json). `tools.exclude` is deprecated → Policy Engine
 // in gemini-cli 1.0; revisit on upgrade. Auto mode (-y) intentionally keeps full tools, so this
 // hardening is read-only-only. The lockdown file lives in sessionDir (cleaned up with the session).
@@ -286,7 +289,7 @@ const geminiRoSetup = trust === 'read-only'
 const geminiRoEnv = trust === 'read-only'
   ? `GEMINI_CLI_TRUST_WORKSPACE=true GEMINI_CLI_SYSTEM_SETTINGS_PATH=${geminiLockdownPath} `
   : ''
-const geminiCall = (modelPin, outBase) => `${geminiRoSetup}{ printf '%s\\n' '<reviewed_content>'; ${geminiInput}; printf '%s\\n' '</reviewed_content>'; } | ${geminiRoEnv}timeout 300 gemini ${modelPin}-p "${geminiText} ${dq(cliFraming)}" -e code-review${geminiYolo} -o text > ${shq(a.sessionDir)}/${outBase}.md 2> ${shq(a.sessionDir)}/${outBase}.err`
+const geminiCall = (modelPin, outBase) => `${geminiRoSetup}{ printf '%s\\n' '<reviewed_content>'; ${geminiInput}; printf '\\n%s\\n' '</reviewed_content>'; } | ${geminiRoEnv}timeout 300 gemini ${modelPin}-p "${geminiText} ${dq(cliFraming)}" -e code-review${geminiYolo} -o text > ${shq(a.sessionDir)}/${outBase}.md 2> ${shq(a.sessionDir)}/${outBase}.err`
 
 // Cross-session quota guard. Distinct from the transient capacity 429 above: the Code Assist
 // backend also enforces a per-ACCOUNT, per-model-bucket QUOTA_EXHAUSTED window — gemini-cli
