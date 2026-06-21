@@ -2,7 +2,7 @@
 # Run one Antigravity (agy) CLI reviewer for committee.
 #   Usage: agy-review.sh <mode> <model> <prompt> <out_md> <out_err> <home_base>
 #     mode       : auto | read-only
-#     model      : agy model id (e.g. gemini-3.5-flash, gemini-3.1-pro)
+#     model      : agy model id (e.g. gemini-3.5-flash, gemini-3.1-pro-low)
 #     prompt     : the -p framing string (single argv token; no further escaping needed)
 #     out_md     : path for the review output
 #     out_err    : path for diagnostics

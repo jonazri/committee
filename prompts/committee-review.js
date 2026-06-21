@@ -71,7 +71,7 @@ const codexCfg = `-c model_reasoning_effort=${codexEffort}${codexModel ? ` -c mo
 const geminiModel = safeTok(a.geminiModel, MODEL_RE)             // --gemini-model override for the primary
 const geminiPrimaryModel = geminiModel || 'gemini-3.5-flash'     // primary Gemini default: Flash
 const geminiProOverridden = !!safeTok(a.geminiProModel, MODEL_RE) // explicit pin suppresses the Pro→Flash retry
-const geminiProModel = safeTok(a.geminiProModel, MODEL_RE) || 'gemini-3.1-pro'
+const geminiProModel = safeTok(a.geminiProModel, MODEL_RE) || 'gemini-3.1-pro-low' // bare gemini-3.1-pro silently falls back to Flash (Verified Fact #9); -low is the working Pro id (re-confirm on agy upgrade per §7 #7)
 // The verifier is always dispatched as a Claude agent, so only Claude tier aliases are valid —
 // a charset-valid non-Claude id (e.g. gpt-5.5) would pass MODEL_RE and then fail at agent()
 // dispatch time; constraining here degrades it to the default instead.
