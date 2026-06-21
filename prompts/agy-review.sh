@@ -58,6 +58,14 @@ fi
 
 cx=0
 if [ "$mode" = "read-only" ]; then
+  # read-only REQUIRES a non-empty home_base ($6): the deny lockdown + copied auth live under it, and an
+  # empty value would build filesystem-root paths. Drop fail-closed with a clear reason rather than
+  # relying on the cwd-containment check below to catch it implicitly (it does — `cd ""` stays in cwd —
+  # but an explicit guard is clearer and not shell-behavior-dependent).
+  if [ -z "$home_base" ]; then
+    echo "agy-review: read-only mode requires a non-empty home_base (\$6) — reviewer dropped" > "$out_err"
+    exit 0
+  fi
   deny="$home_base/.gemini/antigravity-cli/settings.json"
   # Hygiene: keep the per-run HOME out of the repo working tree (cwd = projectRoot in production) so a
   # per-run state dir never pollutes cwd / git status — run this FIRST, before writing ANY state (deny

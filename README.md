@@ -94,7 +94,7 @@ Reviews an implementation plan for completeness, feasibility, task decomposition
 Before each run, Committee presents a trust dialog:
 
 - **Auto Mode** (default) — CLI reviewers run with their own auto-approval flags so they can explore the repo (`git log`, `grep`, `blame`) — Kiro with `--trust-all-tools`, the Gemini reviewers via `agy --dangerously-skip-permissions`; the Claude reviewer inherits the parent session's auto-mode classifier. The parent classifier does NOT gate commands inside the reviewer subprocesses — diff-borne prompt injection can execute there.
-- **Read-only** — Gemini reviewers run `agy` under a fail-closed deny lockdown: repo reads (`read_file`/`grep`) allowed; writes, shell, and URL/network fetch denied. Safer for untrusted code (but not exfil-safe — see Security Considerations).
+- **Read-only** — Gemini reviewers run `agy` under a fail-closed deny lockdown: repo reads (`read_file`/`grep_search`) allowed; writes, shell, and URL/network fetch denied. Safer for untrusted code (but not exfil-safe — see Security Considerations).
 
 ## Committee Loop
 
@@ -224,7 +224,7 @@ Codex (GPT-5.4) is the bottleneck. The workflow's Codex reviewer overrides to `m
 ## Security Considerations
 
 - **Auto Mode** (default): Kiro uses `--trust-all-tools`, the Gemini reviewers run `agy --dangerously-skip-permissions`. A malicious diff could trigger arbitrary command execution via prompt injection at the reviewer-CLI layer. The parent session's auto-mode classifier does not gate subprocess internals. Use only for reviewing your own code.
-- **Read-only mode**: Kiro uses `--trust-tools=fs_read` (no shell). The Gemini reviewers run `agy` under a fail-closed per-run-`HOME` `permissions.deny` lockdown (`write_file`/`edit_file`/`replace`/`command`/`run_command`/`read_url`/`fetch`/`web_search`/`browser_action` denied) — repo reads (`read_file`/`grep`) are still ALLOWED, so this is *safer for untrusted content*, NOT a zero-tool sandbox. **Not exfil-safe:** `agy`'s reads are not filesystem-confined, so a prompt-injected reviewer can read local files (incl. `~/.gemini` creds) and echo them into the review output (accepted risk); the `read_url`/`fetch`/`web_search`/`browser_action` denials only close the *network* exfil channel.
+- **Read-only mode**: Kiro uses `--trust-tools=fs_read` (no shell). The Gemini reviewers run `agy` under a fail-closed per-run-`HOME` `permissions.deny` lockdown (`write_file`/`edit_file`/`replace`/`command`/`run_command`/`read_url`/`fetch`/`web_search`/`browser_action` denied) — repo reads (`read_file`/`grep_search`) are still ALLOWED, so this is *safer for untrusted content*, NOT a zero-tool sandbox. **Not exfil-safe:** `agy`'s reads are not filesystem-confined, so a prompt-injected reviewer can read local files (incl. `~/.gemini` creds) and echo them into the review output (accepted risk); the `read_url`/`fetch`/`web_search`/`browser_action` denials only close the *network* exfil channel.
 - **Gemini `@` tokens**: `agy` processes `@path` in stdin and reads the file via `read_file` (NOT workspace-confined — verified to read out-of-repo paths). In read-only mode writes/shell/network are denied, so an `@`-read can't be written out or fetched to a URL, but it can still be echoed into the review output (accepted risk). Auto mode trusts the reviewer with full tools.
 - **Branch name injection**: The skill instructs the executing LLM to quote all branch names in bash commands. Defense-in-depth for crafted branch names.
 
