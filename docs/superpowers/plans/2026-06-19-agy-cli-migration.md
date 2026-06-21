@@ -36,6 +36,14 @@
 
 ## Global Constraints
 
+> **[Post-implementation note — 2026-06-21]** The bullets below are the PLANNED defaults. Implementation
+> changed two of them (per §7 #7's active-model assertion + the accept-reads decision): the Gemini-Pro pin
+> is **`gemini-3.1-pro-low`** (bare `gemini-3.1-pro` silently falls back to Flash — Fact #9), and the
+> read-only deny list also denies **`run_command(*)`/`fetch(*)`/`web_search(*)`/`browser_action(*)`** while
+> deliberately **keeping repo reads** (read-only is NOT exfil-safe; the read-confinement gate was
+> downgraded to documented characterization). The design-of-record for the final state is the spec's
+> top revision note + CLAUDE.md / README.md.
+
 - **`agy` model ids (raw, verified AS OF the design date — re-confirmed at migration by §7 #7's active-model assertion, since an unknown/retired id silently routes to Flash per Fact #9):** primary Gemini = `gemini-3.5-flash`; Gemini-Pro = `gemini-3.1-pro`; Pro→Flash retry target = `gemini-3.5-flash`. Operator overrides (`--gemini-model`, `--gemini-pro-model`) flow through the existing `MODEL_RE = /^[A-Za-z0-9._-]+$/` sanitizer — raw ids pass, display names do not.
 - **Auto trust** ⇒ `agy ... --dangerously-skip-permissions`. **Read-only trust** ⇒ NO skip flag; a per-run `HOME` redirect to a dir whose `~/.gemini/antigravity-cli/settings.json` carries `permissions.deny: ["write_file(*)","edit_file(*)","replace(*)","command(*)","read_url(*)"]`. Read-only is **fail-closed**: if the deny file is not written, `agy` is never invoked.
 - **agy reuses `~/.gemini/`**: auth/state live there. Read-only mode **copies** (never symlinks) the mutable auth/state files into the per-run home so concurrent runs never write through to the real `~/.gemini`; only the immutable `builtin/` dir is symlinked. The per-run HOME is created **OUTSIDE projectRoot** (`mktemp -d` under `$TMPDIR`), never under `sessionDir`, and removed by a per-call QUOTED EXIT/INT/TERM trap plus a trailing `rm -rf` in the caller (trap fires on cancel/SIGTERM; the trailing rm fires on the normal path before the retry reassigns the var; session cleanup does not cover it; SIGKILL is the only uncovered path) — this keeps the copied OAuth creds beyond agy's `read_file`/cwd confinement; the review `.md`/`.err` stay in `sessionDir`.

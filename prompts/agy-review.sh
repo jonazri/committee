@@ -13,7 +13,9 @@
 # Contract: on success out_md is non-empty. On ANY failure (setup, auth, agy error, empty
 # review INPUT, empty output, non-zero/timeout exit) the helper leaves out_md EMPTY and writes
 # the reason to out_err, so the caller's single "is out_md empty?" check is sufficient
-# (ran_ok=false). Always exits 0 so a fail-closed skip is not mistaken for a crash.
+# (ran_ok=false). Exits 0 for every review OUTCOME — including fail-closed drops — so a skip is not
+# mistaken for a crash. The ONLY non-zero exit is the arity guard (exit 2) for a caller bug (too few
+# args): the write-the-reason contract can't be honored without out_err, so that fails loud instead.
 #
 # agy headlessly auto-acts with NO opt-in flag, and --sandbox does not stop it, so read-only is
 # enforced by a permissions.deny glob list in a per-run HOME. SECURITY POSTURE (2026-06-21 decision):

@@ -195,8 +195,9 @@ const codexRecover = `; cx=$?; [ "$cx" = 0 ] && [ ! -s ${shq(a.sessionDir)}/code
 // Per-scope focus areas + false-positive caution, injected DIRECTLY into the CLI
 // reviewer's own prompt (not just the outer agent's prose) so Kiro/Gemini actually
 // receive the per-scope guidance the kiro.md/gemini.md framing would otherwise carry.
-// Each embed site wraps this in dq(), so it stays safe inside the double-quoted CLI
-// argument even if focusAreas()/lensFor() later add a metacharacter. Carries the per-scope
+// The Kiro embed site wraps this in dq() (safe inside its double-quoted CLI argument); the Gemini
+// site passes it via agyFraming as a single shq()'d argv token to agy-review.sh (no dq() needed).
+// Both stay safe even if focusAreas()/lensFor() later add a metacharacter. Carries the per-scope
 // focus areas, the reviewer-not-implementer SAFETY RULES (kiro.md/gemini.md never reach the
 // CLI subprocess otherwise), the SDK false-positive caution, and the spec/static-analysis
 // read triggers — so those reach the CLI reviewer deterministically, not just the launcher prose.
@@ -270,7 +271,9 @@ const agyFraming = `${geminiText} ${cliFraming}`
 // primary's trailing rm runs before the retry reassigns $agyhome, so re-arming the EXIT trap is
 // harmless; when split, each shell self-cleans.) NO accumulator (no space-delimited word-split), NO
 // interrupt leak. SIGKILL is the only uncovered path. The review .md/.err stay in sessionDir.
-// Setup-failure fallback: the `bash agy-review.sh` helper always exits 0, so the trailing `|| { … }`
+// Setup-failure fallback: the `bash agy-review.sh` helper exits 0 for every review OUTCOME (it only
+// exits non-zero on a usage/arity error — exit 2 — which agyPipe never triggers since it always passes
+// 6 args), so the trailing `|| { … }`
 // fires ONLY when the setup chain short-circuits (cd projectRoot / mktemp -d failed) before the
 // helper runs — it writes a reason to <out>.err and leaves <out>.md empty so the reviewer drops
 // with a diagnostic instead of an empty/absent .err (no silent reasonless drop on an infra failure).
