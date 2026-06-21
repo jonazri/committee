@@ -73,7 +73,7 @@ if [ "${#JSON_FILES[@]}" -gt 0 ] && command -v python3 >/dev/null 2>&1; then
   out=""
   for f in "${JSON_FILES[@]}"; do
     err=$(python3 -m json.tool --no-ensure-ascii < "$f" >/dev/null 2>&1 \
-          || python3 -c "import json,sys; json.load(open('$f'))" 2>&1 | tail -1)
+          || python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f" 2>&1 | tail -1)
     [ -n "$err" ] && out="$out$f: $err"$'\n'
   done
   append_section "json syntax" "$out"
