@@ -10,6 +10,30 @@
 
 **Reference spec:** `docs/superpowers/specs/2026-06-19-agy-cli-migration-design.md` (read it before starting).
 
+## Execution preamble (read first)
+
+**Driver skill:** `superpowers:subagent-driven-development` — dispatch one fresh subagent per task, review between tasks. (Inline `superpowers:executing-plans` with checkpoints is the fallback.)
+
+**Context the executor must load before starting:**
+- The **reference spec** above — the "why" and the verified `agy` facts (esp. Fact #9 silent-Flash, §6 credential isolation, §7 acceptance criteria).
+- **`CLAUDE.md`** — repo conventions and gotchas, especially *"Developing & deploying changes"* (skills install as **symlinks** into this repo; `committee-review.js` + helper edits are live immediately, but **SKILL.md edits need a fresh Claude Code session** to take effect — so the live `/committee` checks in Tasks 3/8 must run in a fresh session) and the *Known Limitations*.
+- **Deferred-ledger backlog** (Minor items intentionally NOT in this plan): `<repo>/.git/committee-loop/<session>/deferred.md` (also `decisions.md` for the rationale trail). It lives under `.git/` and is not version-controlled — copy anything you want to keep before it's cleaned.
+
+**Environment preconditions (verify once up front):** `agy` is installed and **logged in** (`agy models` lists Gemini 3.x — run `agy` once interactively to OAuth if not); the legacy `gemini` CLI no longer works (`IneligibleTierError`), so do not fall back to it. `node`, `git`, `tmux`, `kiro-cli`, `codex` on PATH.
+
+**Task order & dependencies:**
+- **Tasks 1 → 2** are a TDD pair, sequential: Task 1 writes the smoke harness (RED), Task 2 the helper (GREEN). Do not reorder.
+- **Task 3** (wire `committee-review.js`) depends on Task 2.
+- **Tasks 4, 5, 6, 7** (committee-loop / SKILL.md / CLAUDE.md / README.md docs) are independent of each other and of Task 3 — safe to fan out to parallel subagents.
+- **Task 8** is LAST: it runs the full acceptance gate + the manual §7 #4/#7 fault-injection gates and commits the acceptance-phase edits. It depends on every prior task.
+
+**Commands & runtimes (the executor will use these repeatedly):**
+- Smoke gate: `bash scripts/agy-smoke-test.sh` — **~1–2 min**, makes REAL agy calls (needs agy logged in); expect `ALL SMOKE CHECKS PASSED`.
+- JS syntax: `node --input-type=module --check < prompts/committee-review.js` — instant.
+- Deploy check: `ls -lL ~/.claude/skills/committee/prompts/agy-review.sh` (see Task 8 Step 2's worktree caveat).
+- Live committee: `/committee --files … [--reviewers=… --trust=read-only]` — **~8–10 min**, MUST be a fresh Claude Code session.
+- Each task ends with a scoped `git commit` (messages given per task); commit only after that task's verify step passes with **observed** output (see *Final verification* at the end).
+
 ## Global Constraints
 
 - **`agy` model ids (raw, verified AS OF the design date — re-confirmed at migration by §7 #7's active-model assertion, since an unknown/retired id silently routes to Flash per Fact #9):** primary Gemini = `gemini-3.5-flash`; Gemini-Pro = `gemini-3.1-pro`; Pro→Flash retry target = `gemini-3.5-flash`. Operator overrides (`--gemini-model`, `--gemini-pro-model`) flow through the existing `MODEL_RE = /^[A-Za-z0-9._-]+$/` sanitizer — raw ids pass, display names do not.
@@ -766,3 +790,26 @@ git diff --cached --quiet || git commit -m "test(committee): record agy @-token/
 **3. Type/name consistency:** `agy-review.sh <mode> <model> <prompt> <out_md> <out_err> <home_base>` is identical in Task 1 (harness call), Task 2 (definition), and Task 3 (`agyPipe`). Model ids (`gemini-3.5-flash`, `gemini-3.1-pro`) and var names (`geminiPrimaryModel`, `geminiProModel`, `geminiProOverridden`, `agyPipe`, `agyMode`, `agyFraming`, `agyScript`) are consistent across Task 3 steps. Output bases (`gemini`, `gemini-pro`) match the existing reviewer names and file names.
 
 Gap note: §7 #4 (retry fires / is suppressed) has no *automated* smoke check (it needs fault injection). It is covered by the **manual forced-failure gate in Task 8 Step 4** (fault-injection run to confirm the retry fires + recovers; override run to confirm suppression), and the spec §7 #4 wording is reconciled to mark it manual. Acceptable — wiring an agy fault-injection path into the harness is out of scope.
+
+---
+
+## Verification before completion (per-phase + final gate)
+
+**Use `superpowers:verification-before-completion` before claiming any task — or the migration — done. Evidence before assertions: run the command, read the output, then check the box.**
+
+**Per-phase (every task):** do not tick a task's checkboxes or run its `git commit` until that task's own verify step has been run and its **Expected** output observed in this session. A green expectation you did not actually run does not count. If a verify step can only run in a fresh session (the live `/committee` checks), say so and run it there before claiming the task complete.
+
+**Final gate — before declaring the whole migration done, run all of these and confirm the quoted evidence:**
+
+- [ ] **Smoke gate:** `bash scripts/agy-smoke-test.sh` → final line `ALL SMOKE CHECKS PASSED`, exit 0 (a `WARN:` on the positive control is acceptable; any `FAIL:` is not).
+- [ ] **JS valid:** `node --input-type=module --check < prompts/committee-review.js` → exit 0, no output.
+- [ ] **No stale gemini-cli machinery in code:** Task 3 Step 3 grep → no matches.
+- [ ] **Doc scrubs clean:** the Task 5 / Task 6 Step 4 / Task 7 Step 6 verify greps → no matches each (incl. the `fifth reviewer reuses` and space-form `gemini CLI` / `no shell access` patterns added by the deferred-fix pass).
+- [ ] **§7 #4 retry gate (manual):** Task 8 Step 4 — observed the Flash retry fire + recover on the injected primary-only failure, AND the injected line reverted (`git diff -- prompts/agy-review.sh` clean).
+- [ ] **§7 #6(b) read-confinement:** the automated T5 probe in the smoke gate PASSED (agy refused the out-of-cwd read); Task 8 Step 4b `@`-token result recorded in CLAUDE.md (no `fill in the observed result` placeholder remains).
+- [ ] **§7 #7 active-model (manual):** Task 8 Step 4d — `gemini-3.1-pro` reported a **Pro** model id (not Flash); if it reported Flash, the pin was corrected in lockstep and re-asserted.
+- [ ] **Live committee (fresh session):** `/committee --files prompts/agy-review.sh` reached quorum with **both** Gemini reviewers `ran_ok=true` via agy (Task 8 Step 5).
+- [ ] **committee-loop preflight:** `bash -n .claude/skills/committee-loop/spawn.sh` clean AND `command -v agy` succeeds (Task 8 Step 5).
+- [ ] **Working tree captured:** every task's commit landed and `git status` is clean (no uncommitted acceptance edits — Task 8 Step 8 ran).
+
+Only after every box above is checked with observed evidence is the migration complete. If any check fails, fix and re-verify — do not report success on a partial pass.
