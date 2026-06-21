@@ -41,8 +41,8 @@ Parse the user's argument (if any) into one of these scopes:
 - **Operator model overrides** (all optional; absent = committee default; none go to `prepare.sh`). Parse each and pass it through to the workflow `args` under the named key. The workflow sanitizes model ids to `[A-Za-z0-9._-]`, effort levels to lowercase letters only (they are enums: `minimal|low|medium|high|xhigh`), and the verifier model to `opus|sonnet|haiku` (it is always a Claude agent) — anything invalid silently falls back to the default rather than erroring.
   - `--codex-model=<id>` → `codexModel` (e.g. `gpt-5.5`; default: codex CLI's configured model)
   - `--codex-effort=<level>` → `codexEffort` (lowercase, e.g. `xhigh`; default `high`)
-  - `--gemini-model=<id>` → `geminiModel` (pins the primary Gemini reviewer; default: unpinned, with a flash fallback — pinning disables that fallback)
-  - `--gemini-pro-model=<id>` → `geminiProModel` (default `gemini-3.1-pro-preview`)
+  - `--gemini-model=<id>` → `geminiModel` (an `agy` model id; pins the primary Gemini reviewer, which runs via the `agy` CLI; default: `gemini-3.5-flash`, no fallback)
+  - `--gemini-pro-model=<id>` → `geminiProModel` (an `agy` model id; pins the 5th Gemini-Pro reviewer, which runs via the `agy` CLI; default `gemini-3.1-pro`. At the default pin a single Pro→Flash retry to `gemini-3.5-flash` fires on empty output; passing `--gemini-pro-model` suppresses that retry.)
   - `--verifier-model=opus|sonnet|haiku` → `verifierModel` (default `sonnet`)
   - `--reviewers=<csv>` → `enabledReviewers` (a `,`-separated allowlist from `claude,codex,kiro,gemini,gemini-pro`; runs ONLY those. Split on `,`, lowercase each, pass as a JSON array. Absent = all five.)
 
@@ -125,8 +125,8 @@ If `--trust=<level>` was parsed above, use that value directly and skip the inte
 Otherwise, call the `AskUserQuestion` tool with:
 - **Question:** `What access level should CLI reviewers (Kiro, Gemini) have?`
 - **Header:** `Trust level`
-- **Option 1** — `Auto Mode (Recommended)` — `Reviewers run autonomously with auto-approval flags (shell + tool access). The Claude reviewer inherits the parent session's auto-mode classifier; CLI reviewers (Kiro, Gemini) run with their own auto-approval flags. Matches the harness's auto permission mode.`
-- **Option 2** — `Read-only` — `Reviewers read the precomputed diff file only. No shell access. Safer for untrusted code.`
+- **Option 1** — `Auto Mode (Recommended)` — `Reviewers run autonomously with auto-approval flags (shell + tool access). The Claude reviewer inherits the parent session's auto-mode classifier; CLI reviewers (Kiro, Gemini) run with their own auto-approval flags — Gemini runs via 'agy --dangerously-skip-permissions' (full tools). Matches the harness's auto permission mode.`
+- **Option 2** — `Read-only` — `Reviewers run under a lockdown. Gemini runs via 'agy' under a per-run-HOME permissions.deny lockdown: repo reads allowed, but writes, shell, AND URL/network fetch denied (fail-closed). Not exfil-safe — agy's reads are not filesystem-confined, so a prompt-injected diff could read local files and echo them into the review output (accepted risk). Safer for untrusted code.`
 
 **Note for plan scope:** if the scope is `plan` (`--plan`/`--spec`), the workflow forces read-only regardless of the answer here (a plan document is imperative instructions an auto-trust reviewer could execute) — so for plan scope this dialog does not change reviewer write access. You may still present it (harmless), or just tell the user plan reviews always run read-only.
 
@@ -147,7 +147,7 @@ If it is missing, abort cleanly:
 
 ### Build args and invoke the workflow
 
-The `committee-review` workflow owns all five reviewers (Claude as a built-in `general-purpose` agent filled from `$PROMPTS_DIR/reviewers/claude.md`, the Codex/Kiro/Gemini CLIs, and a second Gemini pinned to the latest pro model `gemini-3.1-pro-preview`), runs a verifier agent per reviewer, and returns a structured result. The skill no longer dispatches Claude or any reviewer subagent itself, and it no longer fills the Claude template or picks the review lens — the workflow does that internally per `scopeType` (its `lensFor`/`focusAreas`).
+The `committee-review` workflow owns all five reviewers (Claude as a built-in `general-purpose` agent filled from `$PROMPTS_DIR/reviewers/claude.md`, the Codex/Kiro CLIs, plus both Gemini reviewers — which run via the `agy` (Antigravity) CLI, NOT the legacy `gemini` binary: the primary Gemini reviewer and a second Gemini pinned to the pro model `gemini-3.1-pro`), runs a verifier agent per reviewer, and returns a structured result. The skill no longer dispatches Claude or any reviewer subagent itself, and it no longer fills the Claude template or picks the review lens — the workflow does that internally per `scopeType` (its `lensFor`/`focusAreas`).
 
 Invoke the `Workflow` tool with `name: "committee-review"`. **If it errors as not-found / unknown workflow** (named user-scope resolution from `~/.claude/workflows/` is environment-dependent), immediately retry with `scriptPath` set to the **resolved** `$PROMPTS_DIR` value followed by `/committee-review.js` — substitute the absolute path (e.g. `/home/<you>/.claude/skills/committee/prompts/committee-review.js`), not the literal string `$PROMPTS_DIR`. Pass `args`:
 
