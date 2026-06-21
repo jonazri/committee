@@ -59,6 +59,19 @@ fi
 cx=0
 if [ "$mode" = "read-only" ]; then
   deny="$home_base/.gemini/antigravity-cli/settings.json"
+  # Hygiene: keep the per-run HOME out of the repo working tree (cwd = projectRoot in production) so a
+  # per-run state dir never pollutes cwd / git status — run this FIRST, before writing ANY state (deny
+  # file / copied auth), so the refusal truly fires before anything lands under cwd. (Under the
+  # accept-reads posture this is NOT a credential boundary — reads are unconfined — but a HOME under cwd
+  # is still undesirable.) home_base is created by the caller (mktemp -d) in production; create it if
+  # absent so `cd` can resolve its real path. (On the refusal path only this empty dir exists; the
+  # caller's trailing `rm -rf` removes it.)
+  mkdir -p "$home_base" 2>/dev/null
+  if homerp=$(cd "$home_base" && pwd -P) && cwdrp=$(pwd -P); then
+    case "$homerp/" in
+      "$cwdrp"/*) echo "agy-review: per-run HOME ($homerp) is INSIDE cwd ($cwdrp) — refusing to place per-run state under the repo; reviewer dropped (set TMPDIR outside the repo)" > "$out_err"; exit 0 ;;
+    esac
+  fi
   # The deny block is the load-bearing control for writes/shell/network. enableTelemetry/
   # showFeedbackSurvey mirror the real ~/.gemini/antigravity-cli/settings.json so a fresh HOME never
   # emits survey/telemetry text into the review output.
@@ -72,15 +85,6 @@ if [ "$mode" = "read-only" ]; then
         && [ -s "$deny" ]; }; then
     echo "agy-review: read-only lockdown setup failed (deny file not written) — reviewer dropped" > "$out_err"
     exit 0
-  fi
-  # Hygiene: keep the per-run HOME out of the repo working tree (cwd = projectRoot in production) so a
-  # per-run state dir never pollutes cwd / git status. (Under the accept-reads posture this is NOT a
-  # credential boundary — reads are unconfined — but a HOME under cwd is still undesirable, so refuse
-  # it BEFORE copying any state.)
-  if homerp=$(cd "$home_base" && pwd -P) && cwdrp=$(pwd -P); then
-    case "$homerp/" in
-      "$cwdrp"/*) echo "agy-review: per-run HOME ($homerp) is INSIDE cwd ($cwdrp) — refusing to place per-run state under the repo; reviewer dropped (set TMPDIR outside the repo)" > "$out_err"; exit 0 ;;
-    esac
   fi
   # Copy mutable auth/state into the per-run home (concurrent-safe; real ~/.gemini never written).
   # settings.json carries gemini's auth selectedType; both installation_id files (top-level +

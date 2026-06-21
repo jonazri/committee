@@ -206,12 +206,14 @@ holds. Because mutable files are **copied** (not symlinked) into a **per-run** h
 concurrent Gemini reviewers cannot race on setup, and nothing agy does (token refresh, state writes)
 touches the real `~/.gemini` (A1/A2). Only the large immutable `builtin/` dir is symlinked
 (`ln -sfn`, idempotent). Each per-run agy HOME is a `mktemp -d` **OUTSIDE projectRoot** (under
-`$TMPDIR`), NOT under `sessionDir` — so the copied OAuth creds are never inside agy's `read_file`/cwd
-confinement boundary (cwd is projectRoot) and cannot be read into the review output (§6) — and it is
+`$TMPDIR`), NOT under `sessionDir`, for CONCURRENCY isolation — **[SUPERSEDED 2026-06-21, see top
+banner: this relocation is NOT a credential boundary. agy's `read_file` is NOT cwd-confined, so the
+copied creds AND the real `~/.gemini` CAN be read and echoed into the review output — accepted risk]** — and it is
 removed by a **per-call QUOTED EXIT/INT/TERM trap** (`trap 'rm -rf "$agyhome"' …`) plus a trailing
 `rm -rf "$agyhome"`: each home is removed immediately on the normal path (before the Pro→Flash retry
 reassigns the var) and the trap cleans the in-flight home on a cancel/tool-timeout (SIGTERM) — so the
-copied creds cannot leak, with NO space-delimited accumulator to word-split (it no longer lives under
+temp dir holding the copied creds is not left on disk after the run (it cannot prevent the in-run
+read-exfil above — accepted risk), with NO space-delimited accumulator to word-split (it no longer lives under
 `sessionDir`, so session cleanup does not cover it; SIGKILL is the only uncovered path). The review `.md`/`.err` stay under `sessionDir`
 (they hold no secrets). **Invariant ownership (defense in depth):** the OUTSIDE-projectRoot location
 is SET in exactly one place — the caller (`agyPipe`/the command block here, via `mktemp -d` under
