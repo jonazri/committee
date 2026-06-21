@@ -218,6 +218,14 @@ git commit -m "test(committee): add agy reviewer acceptance smoke harness"
 # is COPIED (not symlinked) so concurrent runs never write through to the real ~/.gemini.
 set -u
 
+# Arity guard BEFORE dereferencing $1..$5 — `set -u` would otherwise abort with a cryptic
+# "unbound variable" on a too-few-args call instead of a clear usage error. out_md/out_err are
+# required to honor the write-the-reason contract (we cannot write a reason without out_err);
+# home_base ($6) is optional (auto mode ignores it). Callers always pass 6, so this is defensive.
+if [ "$#" -lt 5 ]; then
+  echo "agy-review: usage: agy-review.sh <mode> <model> <prompt> <out_md> <out_err> [home_base] (got $# args)" >&2
+  exit 2
+fi
 mode=$1; model=$2; prompt=$3; out_md=$4; out_err=$5; home_base=${6:-}
 : > "$out_md"; : > "$out_err"
 
@@ -391,9 +399,13 @@ const agyFraming = `${geminiText} ${cliFraming}`
 // harmless; when split, each shell self-cleans.) NO accumulator (the old space-delimited `$_agyhomes`
 // word-split unsafely), NO interrupt leak. SIGKILL is the only uncovered path. The review .md/.err
 // stay in sessionDir (they hold no secrets).
+// Setup-failure fallback: the `bash agy-review.sh` helper always exits 0, so the trailing `|| { … }`
+// fires ONLY when the setup chain short-circuits (cd projectRoot / mktemp -d failed) before the
+// helper runs — it writes a reason to <out>.err and leaves <out>.md empty so the reviewer drops
+// with a diagnostic instead of an empty/absent .err (no silent reasonless drop on an infra failure).
 const agyPipe = (model, outBase) =>
   `cd ${shq(projectRoot)} && agyhome=$(mktemp -d "\${TMPDIR:-/tmp}/committee-agy.XXXXXX") && trap 'rm -rf "\$agyhome"' EXIT INT TERM && { printf '%s\\n' '<reviewed_content>'; ${geminiInput}; printf '\\n%s\\n' '</reviewed_content>'; } | ` +
-  `bash ${agyScript} ${agyMode} ${shq(model)} ${shq(agyFraming)} ${shq(`${a.sessionDir}/${outBase}.md`)} ${shq(`${a.sessionDir}/${outBase}.err`)} "\$agyhome"; rm -rf "\$agyhome"`
+  `bash ${agyScript} ${agyMode} ${shq(model)} ${shq(agyFraming)} ${shq(`${a.sessionDir}/${outBase}.md`)} ${shq(`${a.sessionDir}/${outBase}.err`)} "\$agyhome" || { : > ${shq(`${a.sessionDir}/${outBase}.md`)}; echo 'agy-review: agyPipe setup failed (cd projectRoot / mktemp -d) — reviewer dropped' > ${shq(`${a.sessionDir}/${outBase}.err`)}; }; rm -rf "\$agyhome"`
 
 const geminiPrompt = `Run the Gemini reviewer via the Antigravity CLI (agy). Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
 Run this EXACT command as ONE Bash invocation with a 300000 ms timeout — it pipes the fenced diff into agy-review.sh, which runs \`agy\` with model ${geminiPrimaryModel}${trust === 'read-only' ? ' under a fail-closed read-only lockdown (per-run HOME with a permissions.deny list; auth is copied so the real ~/.gemini is untouched)' : ' with --dangerously-skip-permissions'}:
@@ -423,8 +435,10 @@ Expected: no matches (all removed).
 
 - [ ] **Step 4: Syntax-check the workflow file**
 
-Run: `node --check prompts/committee-review.js`
-Expected: no output, exit 0 (valid JS).
+Run: `node --input-type=module --check < prompts/committee-review.js`
+Expected: no output, exit 0 (valid ESM).
+
+(Use `--input-type=module`, NOT a bare `node --check prompts/committee-review.js`: the file is ESM — `export const meta`, top-level `await` — and the repo has **no `package.json`**, so a bare `.js` check is parsed as CommonJS on Node < 22.7 and FALSE-fails on `export`/top-level-await, unrelated to your edits. If your Node rejects `--input-type` with `--check`, instead document/require Node ≥ 22.7 and run `node --check` there.)
 
 - [ ] **Step 5: Smoke test still green**
 
@@ -435,7 +449,7 @@ Expected: `ALL SMOKE CHECKS PASSED` (Task 3 didn't touch the helper; this guards
 
 In a **fresh Claude Code session** in this repo, run:
 `/committee --files README.md --reviewers=gemini,gemini-pro --trust=read-only`
-Expected: this subset has exactly two reviewers, and the 2-reviewer quorum needs BOTH — so quorum is met only if both `Gemini` and `Gemini-Pro` report `ran_ok=true`. If one model is quota-limited, only one runs → the workflow returns `degraded:true` (quorum NOT met); that is an acceptable smoke signal that the surviving reviewer works via agy, but it is NOT a quorum-met pass — to actually exercise quorum here, both must run. Confirm no `gemini` binary was invoked: while it runs, `grep -rl 'agy ' .committee/session-*/` should show the agy command and there should be no `gemini -p` calls. Then clean up any leftover `.committee/session-*`.
+Expected: this subset has exactly two reviewers, and the 2-reviewer quorum needs BOTH — so quorum is met only if both `Gemini` and `Gemini-Pro` report `ran_ok=true`. If one model is quota-limited, only one runs → the workflow returns `degraded:true` (quorum NOT met); that is an acceptable smoke signal that the surviving reviewer works via agy, but it is NOT a quorum-met pass — to actually exercise quorum here, both must run. **Confirm the agy path (not gemini-cli) was used by behavior, not by grepping the session dir:** the reliable signal is that `<session>/gemini.md` / `gemini-pro.md` are **non-empty** (the agy reviewers produced output) and the per-reviewer result `note`s mention agy. Do NOT rely on `grep -rl 'agy ' .committee/session-*/` — `agy` is invoked from inside `agy-review.sh` (its command text never lands under `.committee/session-*`, which holds only `gemini.md`/`.err` + the now-removed `agy-home-*`), so that grep can find nothing even on a correct run. If you want positive proof no `gemini` *binary* ran, watch `pgrep -af 'gemini -p'` during the run (expect none) or check the agy logs under `~/.gemini/antigravity-cli/log/`. Then clean up any leftover `.committee/session-*`.
 
 - [ ] **Step 7: Commit**
 
@@ -532,6 +546,8 @@ Replace the `gemini` prerequisite bullet (the `npm install -g @google/gemini-cli
 - **agy** (Google Antigravity CLI) — install per https://antigravity.google, then sign in (run `agy` once interactively to complete OAuth). Both Gemini reviewers run through `agy` (`agy -p --model gemini-3.5-flash` / `gemini-3.1-pro`). The legacy `gemini` CLI is no longer accepted by the Gemini Code Assist backend for individual accounts (`IneligibleTierError: UNSUPPORTED_CLIENT`), so it is not used.
 ```
 
+**Also fix the Prerequisites intro sentence (CLAUDE.md ~line 13)** — it currently reads "All four reviewer CLIs must be installed and authenticated **(the fifth reviewer reuses the `gemini` CLI, just pinned to a different model)**". The parenthetical is now FALSE (the fifth reviewer runs via `agy`, not a re-used `gemini` CLI) and directly contradicts the migration premise. Reword to, e.g., "All reviewer CLIs must be installed and authenticated (both Gemini reviewers run via the `agy` CLI, just pinned to different models)."
+
 - [ ] **Step 2: "What This Is" + Architectural Notes**
 
 Update the reviewer list and the "Reviewer parallelism" / "Operator model overrides" / "Known Limitations" paragraphs:
@@ -557,8 +573,8 @@ Remove "Gemini model fallback (headless)", "Gemini quota windows (cross-session 
 
 - [ ] **Step 4: Verify**
 
-Run: `grep -n -i 'gemini-cli\|@google/gemini\|GEMINI_CLI\|gemini-3.1-pro-preview\|isInteractive' CLAUDE.md`
-Expected: no matches (if the cleanup note still reads "gemini-cli", reword it to "Gemini quota markers").
+Run: `grep -n -i 'gemini-cli\|@google/gemini\|GEMINI_CLI\|gemini-3.1-pro-preview\|isInteractive\|fifth reviewer reuses' CLAUDE.md`
+Expected: no matches (`fifth reviewer reuses` catches the stale Prerequisites-intro parenthetical from Step 1; if the cleanup note still reads "gemini-cli", reword it to "Gemini quota markers").
 
 - [ ] **Step 5: Commit**
 
@@ -600,8 +616,9 @@ agy            # run once interactively to complete OAuth, then exit
               │     └── Gemini-Pro — agent runs `agy --model gemini-3.1-pro` (Pro→Flash retry)
 ```
 
-- [ ] **Step 4: Security modes + `@` tokens (≈ lines 97, 133, 144, 227–229)**
+- [ ] **Step 4: Security modes + `@` tokens (≈ lines 97–98, 133, 144, 227–229)**
 
+- Line ≈98 (the short Read-only bullet in the trust/usage section): "Read-only — Reviewers read a precomputed diff file. No shell access. Safer for untrusted code." is now partially inaccurate under agy — read-only is NOT zero-tool-access (the agy reviewers may `read_file`/`grep` the repo for context). Reword to, e.g., "Read-only — Gemini reviewers run `agy` under a fail-closed deny lockdown: repo reads (`read_file`/`grep`) allowed; writes, shell, and URL/browser fetch denied. Safer for untrusted code." (Grep `grep -n 'No shell access' README.md` to anchor it — it is a SEPARATE bullet from the line ≈228 description below.)
 - Line ≈227 ("Gemini uses `-y`") → "Gemini reviewers run `agy --dangerously-skip-permissions`". (Line ≈97 phrases it as CLI reviewers' "auto-approval flags" — no literal `-y`; reword that to name `agy --dangerously-skip-permissions` for Gemini too. Grep `grep -n 'Gemini uses -y\|auto-approval flags' README.md` to anchor both.)
 - Line ≈228 (read-only): replace "Gemini receives diff via stdin (no tool access)" with "Gemini reviewers run `agy` under a fail-closed deny lockdown (per-run HOME; `write_file`/`edit_file`/`replace`/`command`/`read_url` denied) — repo reads (`read_file`/`grep`) are still allowed, but writes, shell, and URL/browser fetch are denied. This is *safer for untrusted content*, NOT 'no tool access': a prompt-injected reviewer can still read repo files, so the residual surface is repo-reads (the `read_url` denial closes the exfiltration channel — see spec §6 / §7 #6)."
 - Line ≈229 (`@` tokens): reword to "Gemini `@` tokens: `agy` may process `@path` in stdin; in read-only mode writes/exec AND URL/browser fetch are denied by the deny lockdown, so an `@`-read cannot be written out or exfiltrated. Auto mode trusts the reviewer with full tools."
@@ -613,8 +630,8 @@ agy            # run once interactively to complete OAuth, then exit
 
 - [ ] **Step 6: Verify**
 
-Run: `grep -n -i '@google/gemini\|gemini-cli\|Bash(gemini\|no tool access\|gemini-3.1-pro-preview' README.md`
-Expected: no matches.
+Run: `grep -n -i '@google/gemini\|gemini-cli\|gemini CLI\|Bash(gemini\|no tool access\|no shell access\|gemini-3.1-pro-preview' README.md`
+Expected: no matches. (Includes the **space-form** `gemini CLI` — the rewritten table/diagram lines used "gemini CLI" with a space, which the hyphenated `gemini-cli` pattern would not catch — plus `no shell access` to confirm the line-98 read-only bullet was reworded.)
 
 - [ ] **Step 7: Commit**
 
@@ -713,6 +730,15 @@ If Step 1 made no change, skip this commit (`git diff --quiet -- prompts/reviewe
 - [ ] **Step 8: Commit the acceptance-phase edits (do NOT leave them uncommitted)**
 
 The acceptance steps above MUTATE tracked files that must be committed so the migration's final state is captured: Step 4b records the OBSERVED `@`-token result into `CLAUDE.md`; Step 4c adds any discovered browser/URL tool names to `prompts/agy-review.sh` AND the spec §2 / Verified-Fact-#5 deny lists; and if Step 4d (the §7 #7 active-model assertion) found the Pro pin silently running Flash, you will have updated the pin across §1/§2/Global Constraints/Task 3/docs. Commit whatever changed:
+
+First, GUARD that no `@`-token placeholder was left unfilled (Step 4b records the OBSERVED result into the CLAUDE.md note that Task 6 Step 3 seeded with a "fill in the observed result" placeholder — shipping it un-replaced would be a silent no-placeholder-standard violation):
+
+```bash
+grep -n 'fill in the observed result' CLAUDE.md && { echo "FAIL: unfilled @-token placeholder in CLAUDE.md — complete Step 4b before committing"; } || echo "OK: no unfilled @-token placeholder"
+```
+Expected: `OK` (no match). If it matches, finish Step 4b first.
+
+Then commit whatever the acceptance phase changed:
 
 ```bash
 git add -A -- CLAUDE.md prompts/agy-review.sh docs/superpowers/specs/2026-06-19-agy-cli-migration-design.md docs/superpowers/plans/2026-06-19-agy-cli-migration.md prompts/committee-review.js README.md .claude/skills/committee/SKILL.md

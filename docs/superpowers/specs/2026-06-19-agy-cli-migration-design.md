@@ -383,7 +383,10 @@ to a gate, A3):
    re-run-smoke-on-upgrade note and the §7 #6(c) browser/URL-tool enumeration.)
 2. **Fail-closed.** With the deny file made unwritable (simulated setup failure), the reviewer
    produces empty `.md`, reports `ran_ok=false`, and `agy` is never invoked.
-3. **Auto mode.** Both reviewers run with `--dangerously-skip-permissions` and produce output.
+3. **Auto mode.** An auto-mode call (`--dangerously-skip-permissions`) produces output. The smoke
+   harness exercises this with a **single** auto call — both reviewers share the one `agy-review.sh`
+   auto path, so one call certifies the mode; the live `/committee` run (Task 8 Step 5) exercises both
+   reviewers end-to-end.
 4. **Pro→Flash retry (verified manually — needs fault injection, not in the smoke harness).** Inject a
    fault that ACTUALLY produces the failure signal (empty `.md` or non-zero exit) — e.g. temporarily
    make the Gemini-Pro per-run HOME's OAuth invalid/unreadable so the primary agy call fails auth and
