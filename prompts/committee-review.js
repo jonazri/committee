@@ -53,10 +53,11 @@ if (!a.sessionDir || !a.promptsDir || !a.projectRoot) {
 }
 
 // ── Operator model overrides ────────────────────────────────────────────────
-// All optional; absent/invalid → committee's default. Model ids and effort levels are
-// sanitized to a safe token charset and interpolated RAW (never shq'd) so codex's `-c`/`-m`
-// and gemini's `-m` parsers see clean values — a value failing the charset is dropped (so a
-// malicious diff that reached the args could never inject shell via an override). Effort is
+// All optional; absent/invalid → committee's default. Model ids and effort levels are sanitized to a
+// safe token charset; a value failing the charset is dropped (so a malicious diff that reached the
+// args could never inject shell via an override). Codex's pins are interpolated RAW into codexCfg (its
+// `-c`/`-m` parser sees clean values); the Gemini pins are passed as shq()'d argv tokens to
+// agy-review.sh (agyPipe → `--model "$model"`), which is strictly safer than raw interpolation. Effort is
 // only honorable where the invocation exposes it: Codex (`model_reasoning_effort`) and the
 // inner loop-agent (spawn `--effort`). The in-workflow Claude reviewer / verifier / Gemini have
 // no per-agent effort knob, so only their MODEL is overridable here (`reviewerModel`/etc).
