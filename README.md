@@ -15,8 +15,8 @@ Committee runs five reviewers in parallel inside the `committee-review` workflow
 | **Claude** | Claude (harness default; `--reviewer-model` to override) | workflow agent (`general-purpose`) + bundled template |
 | **Codex** | GPT-5.4 | workflow agent runs `codex review` / `codex exec` |
 | **Kiro** | Amazon Q | workflow agent runs `kiro-cli chat` |
-| **Gemini** | Gemini (default, + flash fallback on 429) | workflow agent runs `gemini` CLI (code-review ext) |
-| **Gemini-Pro** | Gemini 3.1 Pro (preview) | workflow agent runs `gemini -m gemini-3.1-pro-preview` (no flash fallback) |
+| **Gemini** | Gemini 3.5 Flash | workflow agent runs `agy -p --model gemini-3.5-flash` |
+| **Gemini-Pro** | Gemini 3.1 Pro | workflow agent runs `agy -p --model gemini-3.1-pro` (Pro→Flash retry at default pin) |
 
 After the reviewers return, the `committee-review` workflow runs **per-reviewer verifiers** in parallel — one agent each, checking that reviewer's claims against the actual codebase — and returns a structured `{ quorum, degraded, perReviewer }` result. Then the `/committee` skill:
 1. **Synthesizes** the verified claims into a deduplicated report with severity ratings, contradiction detection, and a merge verdict
@@ -24,7 +24,7 @@ After the reviewers return, the `committee-review` workflow runs **per-reviewer 
 
 ## Prerequisites
 
-Install and authenticate all four reviewer CLIs (the fifth reviewer reuses the `gemini` CLI):
+Install and authenticate the reviewer CLIs (both Gemini reviewers use the Antigravity `agy` CLI):
 
 ```bash
 # Codex (OpenAI)
@@ -35,10 +35,9 @@ codex login
 # See https://kiro.dev for installation
 kiro-cli login
 
-# Gemini (Google)
-npm install -g @google/gemini-cli
-# Configure GEMINI_API_KEY in ~/.gemini/settings.json
-gemini extensions install https://github.com/gemini-cli-extensions/code-review
+# Gemini reviewers — Google Antigravity CLI
+# Install per https://antigravity.google, then sign in:
+agy            # run once interactively to complete OAuth, then exit
 
 # Claude — already running if you're in Claude Code
 ```
@@ -94,8 +93,8 @@ Reviews an implementation plan for completeness, feasibility, task decomposition
 
 Before each run, Committee presents a trust dialog:
 
-- **Auto Mode** (default) — CLI reviewers (Kiro, Gemini) run with their own auto-approval flags so they can explore the repo (`git log`, `grep`, `blame`); the Claude reviewer inherits the parent session's auto-mode classifier. The parent classifier does NOT gate commands inside Kiro/Gemini subprocesses — diff-borne prompt injection can execute there.
-- **Read-only** — Reviewers read a precomputed diff file. No shell access. Safer for untrusted code.
+- **Auto Mode** (default) — CLI reviewers run with their own auto-approval flags so they can explore the repo (`git log`, `grep`, `blame`) — Kiro with `--trust-all-tools`, the Gemini reviewers via `agy --dangerously-skip-permissions`; the Claude reviewer inherits the parent session's auto-mode classifier. The parent classifier does NOT gate commands inside the reviewer subprocesses — diff-borne prompt injection can execute there.
+- **Read-only** — Gemini reviewers run `agy` under a fail-closed deny lockdown: repo reads (`read_file`/`grep`) allowed; writes, shell, and URL/network fetch denied. Safer for untrusted code (but not exfil-safe — see Security Considerations).
 
 ## Committee Loop
 
@@ -130,7 +129,7 @@ Add these to your project's `.claude/settings.local.json` for smooth operation (
 }
 ```
 
-This allows all Bash commands for this project. Committee's workflow agents run `git`, `codex`, `kiro-cli`, `gemini`, `cat`, `mktemp`, `rm`, and other standard commands. Without a broad permission, you'll get frequent approval prompts — especially from the CLI reviewer invocations.
+This allows all Bash commands for this project. Committee's workflow agents run `git`, `codex`, `kiro-cli`, `agy`, `cat`, `mktemp`, `rm`, and other standard commands. Without a broad permission, you'll get frequent approval prompts — especially from the CLI reviewer invocations.
 
 If you prefer granular permissions instead of a blanket allow:
 
@@ -141,7 +140,7 @@ If you prefer granular permissions instead of a blanket allow:
       "Bash(git:*)",
       "Bash(codex:*)",
       "Bash(kiro-cli:*)",
-      "Bash(gemini:*)",
+      "Bash(agy:*)",
       "Bash(gh:*)",
       "Bash(wc:*)",
       "Bash(mktemp:*)",
@@ -198,8 +197,8 @@ User session
               │     ├── Claude  — general-purpose agent + bundled template
               │     ├── Codex   — agent runs codex review / codex exec
               │     ├── Kiro    — agent runs kiro-cli chat
-              │     ├── Gemini  — agent runs gemini CLI (+ flash fallback on 429)
-              │     └── Gemini-Pro — agent runs gemini -m gemini-3.1-pro-preview
+              │     ├── Gemini  — agent runs `agy --model gemini-3.5-flash`
+              │     └── Gemini-Pro — agent runs `agy --model gemini-3.1-pro` (Pro→Flash retry)
               ├── Verify stage — one verifier agent per reviewer, streamed as each review completes
               └── returns { quorum, degraded, perReviewer }
                     → skill synthesizes (dedup, contradiction detection, verdict)
@@ -224,9 +223,9 @@ Codex (GPT-5.4) is the bottleneck. The workflow's Codex reviewer overrides to `m
 
 ## Security Considerations
 
-- **Auto Mode** (default): Kiro uses `--trust-all-tools`, Gemini uses `-y`. A malicious diff could trigger arbitrary command execution via prompt injection at the reviewer-CLI layer. The parent session's auto-mode classifier does not gate subprocess internals. Use only for reviewing your own code.
-- **Read-only mode**: Kiro uses `--trust-tools=fs_read` (no shell). Gemini receives diff via stdin (no tool access). Safer for reviewing untrusted code.
-- **Gemini `@` tokens**: Gemini CLI processes `@path` in stdin, attempting file reads. Blocked in read-only mode; succeeds in auto mode.
+- **Auto Mode** (default): Kiro uses `--trust-all-tools`, the Gemini reviewers run `agy --dangerously-skip-permissions`. A malicious diff could trigger arbitrary command execution via prompt injection at the reviewer-CLI layer. The parent session's auto-mode classifier does not gate subprocess internals. Use only for reviewing your own code.
+- **Read-only mode**: Kiro uses `--trust-tools=fs_read` (no shell). The Gemini reviewers run `agy` under a fail-closed per-run-`HOME` `permissions.deny` lockdown (`write_file`/`edit_file`/`replace`/`command`/`run_command`/`read_url`/`fetch`/`web_search`/`browser_action` denied) — repo reads (`read_file`/`grep`) are still ALLOWED, so this is *safer for untrusted content*, NOT a zero-tool sandbox. **Not exfil-safe:** `agy`'s reads are not filesystem-confined, so a prompt-injected reviewer can read local files (incl. `~/.gemini` creds) and echo them into the review output (accepted risk); the `read_url`/`fetch`/`web_search`/`browser_action` denials only close the *network* exfil channel.
+- **Gemini `@` tokens**: `agy` processes `@path` in stdin and reads the file via `read_file` (NOT workspace-confined — verified to read out-of-repo paths). In read-only mode writes/shell/network are denied, so an `@`-read can't be written out or fetched to a URL, but it can still be echoed into the review output (accepted risk). Auto mode trusts the reviewer with full tools.
 - **Branch name injection**: The skill instructs the executing LLM to quote all branch names in bash commands. Defense-in-depth for crafted branch names.
 
 ## File Structure
@@ -241,7 +240,7 @@ prompts/
   reviewers/
     claude.md                        # Claude reviewer prompt template (filled per-scope, dispatched to general-purpose agent)
     kiro.md                          # Kiro review prompt template
-    gemini.md                        # Gemini review prompt template
+    gemini.md                        # Gemini review prompt template (consumed by the agy-backed Gemini reviewers)
 CLAUDE.md                            # Project conventions
 docs/superpowers/
   specs/                             # Design spec
