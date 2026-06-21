@@ -38,7 +38,10 @@
 
 > **[Post-implementation note — 2026-06-21]** The bullets below are the PLANNED defaults. Implementation
 > changed two of them (per §7 #7's active-model assertion + the accept-reads decision): the Gemini-Pro pin
-> is **`gemini-3.1-pro-low`** (bare `gemini-3.1-pro` silently falls back to Flash — Fact #9), and the
+> is now the display name **`Gemini 3.1 Pro (High)`** (the High tier is reachable only by display name in agy
+> v1.0.10; the raw ids `gemini-3.1-pro-high`/`-medium`/bare `gemini-3.1-pro` all silently fall back to Flash —
+> Fact #9 — while `gemini-3.1-pro-low` is the only working raw Pro id, giving the Low tier; the display-name
+> default bypasses `MODEL_RE` and is `shq()`-quoted so its spaces/parens are shell-safe), and the
 > read-only deny list also denies **`run_command(*)`/`fetch(*)`/`web_search(*)`/`browser_action(*)`** while
 > deliberately **keeping repo reads** (read-only is NOT exfil-safe; the read-confinement gate was
 > downgraded to documented characterization). The design-of-record for the final state is the spec's

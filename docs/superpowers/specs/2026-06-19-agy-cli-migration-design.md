@@ -20,8 +20,10 @@ tools; it is "safer than auto", **NOT exfil-safe**. Consequences: the §2/§7 de
 isolation, not a credential boundary**; the §3 `@`-token check and the §7 #6(b) read-confinement criterion are
 **downgraded from BLOCKING to documented characterization** (the `scripts/agy-smoke-test.sh` T5 probe is a
 non-blocking NOTE). **Also (§7 #7 active-model assertion):** the bare raw id `gemini-3.1-pro` silently
-falls back to Flash — the working Pro id is `gemini-3.1-pro-low`, now the Gemini-Pro default (`gemini-3.1-pro-high`
-also falls back; re-confirm the active model on each agy upgrade). CLAUDE.md "agy read-only lockdown" is the
+falls back to Flash — the Gemini-Pro default is now the display name `Gemini 3.1 Pro (High)` (the High tier is
+reachable ONLY by display name in agy v1.0.10; the raw ids `gemini-3.1-pro-high`/`-medium`/bare `gemini-3.1-pro`
+all silently fall back to Flash, while `gemini-3.1-pro-low` is the only working raw Pro id, giving the Low tier;
+re-confirm the active model on each agy upgrade). CLAUDE.md "agy read-only lockdown" is the
 authoritative user-facing statement.
 
 > **This migration is now a necessity, not a preference.** A committee review of this very spec ran
@@ -112,7 +114,7 @@ context7 `/google-antigravity/antigravity-cli`, permissions reference).
 | Reviewer    | Old (`gemini`)                                   | New (`agy`)                          |
 |-------------|--------------------------------------------------|--------------------------------------|
 | Gemini      | unpinned + pro→flash fallback                    | `--model gemini-3.5-flash`, **drop on failure** |
-| Gemini-Pro  | `-m gemini-3.1-pro-preview`, **no** fallback     | `--model gemini-3.1-pro-low`, **single Pro→Flash retry** (default pin only), then drop |
+| Gemini-Pro  | `-m gemini-3.1-pro-preview`, **no** fallback     | `--model "Gemini 3.1 Pro (High)"` (display name — the only way to reach the High tier; the hardcoded default bypasses `MODEL_RE` and is `shq()`-quoted so its spaces/parens are shell-safe), **single Pro→Flash retry** (default pin only), then drop |
 
 Both write the same output files as today (`gemini.md`/`.err`, `gemini-pro.md`/`.err`) so the
 reviewer-agent parsing and the verify stage are unchanged.
@@ -121,7 +123,7 @@ reviewer-agent parsing and the verify stage are unchanged.
 
 - **Primary Gemini tier drops to Flash.** The old primary effectively ran a Pro-class default with a
   flash fallback; the new primary is Flash with no fallback. This is intentional: the Pro-tier Gemini
-  perspective is now carried by **Gemini-Pro** (`gemini-3.1-pro-low`), and a fast Flash primary keeps the
+  perspective is now carried by **Gemini-Pro** (`Gemini 3.1 Pro (High)`), and a fast Flash primary keeps the
   panel's wall-clock down. The primary still honors an operator `--gemini-model` override (the
   `gemini-3.5-flash` in the §1 table is the *default*, used when no override is given); an override
   simply replaces the Flash default and likewise gets no fallback (drop-on-failure).
@@ -226,7 +228,7 @@ by the helper, AND gated by §7 #6(a)" — three layers, not a single silent ass
 **Gemini-Pro Pro→Flash retry** (default pin only — see §1):
 
 ```
-# primary (read-only block above, or auto block) with --model gemini-3.1-pro-low, writing gemini-pro.md
+# primary (read-only block above, or auto block) with --model "Gemini 3.1 Pro (High)", writing gemini-pro.md
 # retry only if NO operator --gemini-pro-model override AND the primary "failed":
 [ -s <session>/gemini-pro.md ] || { <re-run the SAME block with --model gemini-3.5-flash>; }
 ```
@@ -320,7 +322,7 @@ triggers.
   bullet (≈ 229); the **`Bash(gemini:*)` permission example** (≈ 144) → `Bash(agy:*)`; and the
   Prerequisites + `--gemini-model`/`--gemini-pro-model` flag descriptions.
 - **`.claude/skills/committee/SKILL.md`** — `gemini`-command prose, trust-dialog wording, the
-  `gemini-pro` model default (`gemini-3.1-pro-preview` → `gemini-3.1-pro-low`), and the workflow-args
+  `gemini-pro` model default (`gemini-3.1-pro-preview` → the display name `Gemini 3.1 Pro (High)`), and the workflow-args
   description.
 - **`.claude/skills/committee-loop/`** — `SKILL.md`, `inner-agent.md`, and **`spawn.sh`**: in
   particular the **preflight tool gate at `spawn.sh:148`** (`for t in tmux claude git realpath
