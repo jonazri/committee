@@ -38,7 +38,7 @@ Optional cross-scope flags (combine with any scope above):
 --reviewer-model=opus|sonnet|haiku      # Override the Claude reviewer's model (default: harness default)
 --codex-model=<id> --codex-effort=<lvl> # Override Codex's model / reasoning effort (default: codex config / high)
 --gemini-model=<id>                      # Pin the primary Gemini reviewer (agy model id; default: gemini-3.5-flash)
---gemini-pro-model=<id>                  # Override the 5th reviewer's pin (agy model id; default: the "Gemini 3.1 Pro (High)" tier; suppresses the Pro→Flash retry)
+--gemini-pro-model=<id>                  # 5th reviewer pin (default: the "Gemini 3.1 Pro (High)" tier). An override must be a RAW id (e.g. gemini-3.1-pro-low for Low) — the High display name can't be passed as an override (MODEL_RE rejects its spaces/parens); suppresses the Pro→Flash retry
 --verifier-model=opus|sonnet|haiku       # Override the per-reviewer verifier model (default: sonnet)
 --reviewers=claude,codex,...             # Allowlist: run ONLY these reviewers (default: all five)
 ```
