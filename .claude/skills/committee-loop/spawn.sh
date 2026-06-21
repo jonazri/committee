@@ -73,7 +73,9 @@ set -- "${POSITIONAL[@]}"
 }
 
 if [ -n "$MODELS_JSON" ]; then
-  # node is a hard transitive dep (codex/gemini CLIs are node packages), but only required when
+  # node is a hard transitive dep (the codex CLI is a node package; agy and kiro-cli are
+  # standalone binaries, and the gemini/gemini-pro model keys map onto the agy-backed
+  # reviewers — no gemini binary is invoked), but only required when
   # --models is used; validate the JSON + derive the inner-agent launch flags here so a bad
   # config fails before the worktree is created. Model/effort tokens that reach the tmux `claude`
   # command MUST be charset-safe (committee-review.js separately sanitizes the reviewer tokens).
@@ -96,7 +98,8 @@ if [ -n "$MODELS_JSON" ]; then
       if (!known.includes(k.toLowerCase())) { console.error("unknown reviewer key: " + k + " (expected one of " + known.join(", ") + ")"); process.exit(1) }
       // NOTE: reviewers.claude.model is validated here but reaches the workflow INDIRECTLY —
       // the inner agent translates it into /committee --reviewer-model=<v> (-> reviewerModel),
-      // unlike codex/gemini fields which map 1:1 onto workflow args. See inner-agent.md
+      // unlike the codex/gemini/gemini-pro model keys (the gemini keys drive the agy-backed
+      // reviewers, not a gemini binary), which map 1:1 onto workflow args. See inner-agent.md
       // <operator_model_overrides>.
       const s = s0 || {}; chk(s.model, "reviewers." + k + ".model"); chkEff(s.effort, "reviewers." + k + ".effort");
       if (s.enabled != null && typeof s.enabled !== "boolean") { console.error("reviewers." + k + ".enabled must be true/false"); process.exit(1) }
@@ -145,7 +148,7 @@ for i in "${!TARGET_FILES[@]}"; do
   TARGET_FILES[$i]="${ABS#$ORIGIN_PATH/}"
 done
 
-for t in tmux claude git realpath sha256sum kiro-cli codex gemini timeout; do
+for t in tmux claude git realpath sha256sum kiro-cli codex agy timeout; do
   command -v "$t" >/dev/null || { echo "missing tool: $t" >&2; exit 1; }
 done
 

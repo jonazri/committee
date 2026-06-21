@@ -77,8 +77,8 @@ If the user's request specifies model choices for this run — e.g. *"only use o
     "claude":     { "model": "opus", "policy": "pin" },
     "codex":      { "model": "gpt-5.5", "effort": "xhigh" },
     "kiro":       { "enabled": false },
-    "gemini":     { "model": "gemini-2.5-pro" },
-    "gemini-pro": { "model": "gemini-3.1-pro-preview" }
+    "gemini":     { "model": "gemini-3.5-flash" },
+    "gemini-pro": { "model": "gemini-3.1-pro-low" }
   },
   "verifier": { "model": "sonnet" }
 }
