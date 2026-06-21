@@ -5,6 +5,22 @@ fail-closed read-only guard, per-run home isolation (outside projectRoot), copy-
 explicit acceptance criteria. Migrates committee's two Gemini reviewers off the `gemini` CLI
 (`@google/gemini-cli`) onto the **Google Antigravity CLI** (`agy`, v1.0.10).
 
+**REVISION (2026-06-21, accept-reads decision — SUPERSEDES the read-confinement parts below).**
+Implementation testing of `agy` v1.0.10 found its file-read tools (`read_file`/`view_file`/`grep_search`/
+`list_dir`, incl. `@`-tokens) are **NOT filesystem-confined** (they read `/etc/passwd` and out-of-projectRoot
+`$TMPDIR` paths), and `agy`'s `permissions.deny` path-globs **cannot scope reads** (only the catch-all
+`tool(*)` glob matches — `tool(/*)`/`tool(/**)`/`..`-patterns do not; and `permissions.allow` cannot override
+`deny`). So the original premise — that a per-run HOME *outside projectRoot* keeps the copied creds beyond a
+cwd-confined `read_file` — does **not hold**, and read-only cannot both allow repo reads and protect local
+files. The operator chose to **ACCEPT the read/exfil risk**: read-only keeps repo reads enabled (so reviewers
+can consult repo context) and accepts that a prompt-injected diff could read local files (incl. `~/.gemini`
+creds) and echo them into the review output. Read-only still denies writes/shell and the network/URL exfil
+tools; it is "safer than auto", **NOT exfil-safe**. Consequences: the §2/§7 deny list adds
+`run_command(*)`/`fetch(*)`/`web_search(*)`/`browser_action(*)`; the per-run HOME is now **concurrency
+isolation, not a credential boundary**; the §3 `@`-token check and the §7 #6(b) read-confinement criterion are
+**downgraded from BLOCKING to documented characterization** (the `scripts/agy-smoke-test.sh` T5 probe is a
+non-blocking NOTE). CLAUDE.md "agy read-only lockdown" is the authoritative user-facing statement.
+
 > **This migration is now a necessity, not a preference.** A committee review of this very spec ran
 > with both Gemini reviewers failing at auth: `IneligibleTierError: This client is no longer
 > supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the
@@ -56,13 +72,18 @@ context7 `/google-antigravity/antigravity-cli`, permissions reference).
    read-only setup is fail-closed (§2).
 5. **Read-only is enforced by a `permissions.deny` glob list** in
    `~/.gemini/antigravity-cli/settings.json`:
-   `"permissions": { "deny": ["write_file(*)", "edit_file(*)", "replace(*)", "command(*)"] }`.
+   `"permissions": { "deny": ["write_file(*)", "edit_file(*)", "replace(*)", "command(*)", "run_command(*)", "read_url(*)", "fetch(*)", "web_search(*)", "browser_action(*)"] }`.
    Confirmed: writes + shell **blocked**, reads + review still work. Notes: bare tool names do **not**
-   match (the parenthesized glob is required); shell is gated by **`command(*)`**, not
-   `run_command(*)`; an **allow-list alone does not default-deny** — the **deny list is load-bearing**,
-   exactly like gemini's `tools.exclude`. (The production read-only list additionally denies
-   **`read_url(*)`** — see §6 credential-exfiltration — using this same verified glob syntax; agy's
-   browser/URL tools are enumerated and denied by exact name per §7 #6.)
+   match (the parenthesized glob is required); shell is gated by **`command(*)`** (we ALSO deny
+   `run_command(*)` as the second shell vector); an **allow-list alone does not default-deny** — the
+   **deny list is load-bearing**, exactly like gemini's `tools.exclude`. **Verified 2026-06-21
+   (accept-reads):** only the catch-all `tool(*)` glob reliably matches — path-globs (`tool(/*)`,
+   `tool(/**)`, `..`-patterns) do NOT match deep/absolute paths and `permissions.allow` does NOT override
+   `permissions.deny`, so reads can only be denied wholesale, never path-scoped. The production read-only
+   list denies writes, both shell vectors, and the network/URL exfil tools (`read_url(*)`, `fetch(*)`,
+   `web_search(*)`, `browser_action(*)` — enumerated by exact name per §7 #6, since name-globs are not
+   trusted); file READS are deliberately NOT denied (see the top-of-doc revision note). This deny literal
+   is one of three copies kept in sync: here, §2, and `prompts/agy-review.sh`.)
 6. **`agy` reuses `~/.gemini/`.** CLI home is `~/.gemini/antigravity-cli/`; settings at
    `~/.gemini/antigravity-cli/settings.json`; auth at `~/.gemini/oauth_creds.json` and
    `~/.gemini/antigravity-cli/antigravity-oauth-token`. Because agy resolves all of this from `$HOME`,
@@ -150,7 +171,7 @@ deny="$agyHome/.gemini/antigravity-cli/settings.json"
 # enableTelemetry/showFeedbackSurvey mirror the real settings so a fresh HOME emits no survey/
 # telemetry text into the review output; the deny block is the load-bearing read-only control.
 if mkdir -p "$agyHome/.gemini/antigravity-cli" \
-   && printf '%s' '{"enableTelemetry":false,"showFeedbackSurvey":false,"permissions":{"deny":["write_file(*)","edit_file(*)","replace(*)","command(*)","read_url(*)"]}}' > "$deny" \
+   && printf '%s' '{"enableTelemetry":false,"showFeedbackSurvey":false,"permissions":{"deny":["write_file(*)","edit_file(*)","replace(*)","command(*)","run_command(*)","read_url(*)","fetch(*)","web_search(*)","browser_action(*)"]}}' > "$deny" \
    && [ -s "$deny" ]; then
   # FAIL-CLOSED if the HOME is INSIDE cwd (=projectRoot): agy read_file is cwd-confined, so creds
   # under cwd would be reachable. Catches a TMPDIR that points into the repo. (Helper: same check.)
@@ -237,10 +258,11 @@ triggers.
 **`@`-token / read-surface — defined check (M2), not a vague task.** During implementation, run the
 §7 `@`-token test and record the result in CLAUDE.md's Known Limitations:
 - Feed a diff on stdin containing an out-of-repo `@/etc/passwd`, **a sentinel at the ACTUAL cred location** (`@<TMPDIR-path>/secret.txt`, outside projectRoot — the load-bearing probe per §7 #6(b); `/etc/passwd` alone is not sufficient), and an in-repo `@path` (e.g. `@README.md`).
-- **Pass/gate criteria:** in **read-only** mode, the deny lockdown already blocks writes/exec, and we
-  VERIFY (not merely document) whether agy's `read_file`/`read_url` are workspace-confined (gemini-cli's
-  `read_file` was) — a failure here **BLOCKS** the migration per §7 #6(b), because an unconfined
-  `read_file` would reach the relocated `$TMPDIR` creds (§6).
+- **Pass/gate criteria (DOWNGRADED 2026-06-21 — no longer blocking):** in **read-only** mode the deny
+  lockdown blocks writes/exec and the network/URL exfil tools. agy's `read_file` is **NOT** workspace-confined
+  (verified, unlike gemini-cli's), so reads of out-of-repo paths (incl. the relocated `$TMPDIR` creds OR the
+  real `~/.gemini`) succeed — this is the **accepted read-exfil risk**, recorded as a Known Limitation in
+  CLAUDE.md, NOT a blocking gate. The smoke harness's T5 probe characterizes it as a non-blocking NOTE.
 - **Auto mode caveat (must be documented, not "fixed"):** in auto mode there is **no** deny list, so
   an `@`-read is an accepted auto-mode risk — the same posture as gemini's `-y` mode. If the test
   shows agy reads arbitrary out-of-repo paths in auto mode, document it as an accepted auto-mode risk
@@ -310,8 +332,9 @@ triggers.
   auto mode is intentionally permissive (`--dangerously-skip-permissions`), same risk posture as
   gemini `-y`.
 - **agy quota error format unverified** — mitigated by not depending on it (drop-on-error).
-- **Credential isolation in read-only: the per-run HOME is OUTSIDE projectRoot (PRIMARY fix), plus
-  `read_url`/browser denied (defense-in-depth).** Read-only mode COPIES real OAuth secrets into a
+- **Credential isolation in read-only — SUPERSEDED 2026-06-21 (accept-reads): there is NO read-side
+  credential boundary; reads incl. creds are an accepted risk. Network exfil (`read_url`/`fetch`/
+  `web_search`/`browser_action`) IS denied.** (Original, now-moot rationale follows.) Read-only mode COPIES real OAuth secrets into a
   per-run agy HOME. The PRIMARY protection is LOCATION: that HOME is a `mktemp -d` **outside
   `projectRoot`** (§2), so agy's `read_file` (confined to cwd = projectRoot) cannot reach the copied
   creds at all — they can be neither read into model context NOR leaked via the review-output `.md`
@@ -398,13 +421,14 @@ to a gate, A3):
    `geminiProOverridden` conditional).
 5. **committee-loop launch.** `spawn.sh` preflight passes with `agy` installed and `gemini` absent.
 6. **`@`-token / read-confinement behavior characterized AND gated.** Per §3, run the `@`-token test
-   and record the OBSERVED result in CLAUDE.md. **HARD GATE** (any failing sub-point BLOCKS the
-   migration — see §6 credential isolation): (a) assert the per-run agy HOME holding the copied OAuth
-   creds is created OUTSIDE `projectRoot` (§2), so it is beyond agy's `read_file`/cwd confinement —
-   the PRIMARY credential protection; (b) **BLOCK if `read_file`/`@`-reads resolve OUTSIDE
-   `projectRoot`** in read-only mode — relocation only protects the creds if read access is actually
-   confined to cwd; an unconfined `read_file` would reach the relocated `$TMPDIR` creds, so a failure
-   here is not merely "recorded" but BLOCKS. The probe MUST feed a path at the ACTUAL cred location (a
+   and record the OBSERVED result in CLAUDE.md. **DOWNGRADED 2026-06-21 — characterization, NOT a gate**
+   (the sub-points below were the original blocking criteria; they are superseded by the accept-reads
+   decision at the top of this doc — recorded, not enforced): (a) the per-run agy HOME holding the copied
+   OAuth creds is created OUTSIDE `projectRoot` (§2), but since agy's `read_file` is NOT cwd-confined this is
+   concurrency isolation, NOT a credential boundary; (b) `read_file`/`@`-reads DO resolve OUTSIDE
+   `projectRoot` in read-only mode (verified) — an unconfined `read_file` reaches the relocated `$TMPDIR`
+   creds AND the real `~/.gemini`, which under the accept-reads decision is documented as a Known
+   Limitation, NOT a blocker. The probe MUST feed a path at the ACTUAL cred location (a
    sentinel under a `$TMPDIR` per-run-HOME path, not just `@/etc/passwd`) and assert it is refused —
    a read_file that refuses `/etc` but allows `$TMPDIR` would still reach the creds, so the
    cred-location probe is the load-bearing one. **This probe is AUTOMATED in `scripts/agy-smoke-test.sh`
