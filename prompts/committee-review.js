@@ -25,9 +25,12 @@ const a = (() => {
 // plan's build steps into the worktree, 2026-06-11; the auto-mode write hole that enabled it — agy's
 // --dangerously-skip-permissions / Kiro's --trust-all-tools — is now closed in both modes.)
 // (committee-loop reviews documents under `--files` and passes --trust=read-only itself; this is the
-// workflow-side guarantee for one-shot `/committee --plan`.) The interactive default is now read-only too
-// (SKILL.md trust dialog), so auto is an explicit opt-in for trusted content.
-const trust = a.scopeType === 'plan' ? 'read-only' : (a.trust === 'read-only' ? 'read-only' : 'auto')
+// workflow-side guarantee for one-shot `/committee --plan`.) The default is now read-only at BOTH layers
+// — the SKILL.md trust dialog AND this workflow fallback: an omitted/garbage `a.trust` resolves to
+// read-only (FAIL-CLOSED to the safer mode), so `auto` is an explicit opt-in (`a.trust === 'auto'`) for
+// trusted content. (Pre-2026-06-23 this defaulted to `auto`, silently escalating a missing trust to the
+// less-restrictive mode — inconsistent with the new posture; flipped per PR #8 review.)
+const trust = a.scopeType === 'plan' ? 'read-only' : (a.trust === 'auto' ? 'auto' : 'read-only')
 const baseSha = a.baseSha || 'none'
 const headSha = a.headSha || 'none'
 const commitSha = a.commitSha || 'N/A'

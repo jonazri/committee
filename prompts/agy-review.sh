@@ -48,7 +48,7 @@ set -u
 # drops fail-closed if empty), but the arity guard still allows a 5-arg call so that drop path — not a
 # cryptic `set -u` abort — handles a missing home_base. Callers always pass 6, so this is defensive.
 if [ "$#" -lt 5 ]; then
-  echo "agy-review: usage: agy-review.sh <mode> <model> <prompt> <out_md> <out_err> [home_base] (got $# args)" >&2
+  echo "agy-review: usage: agy-review.sh <mode> <model> <prompt> <out_md> <out_err> <home_base> (got $# args; home_base is required for both modes — a missing one drops the reviewer fail-closed)" >&2
   exit 2
 fi
 mode=$1; model=$2; prompt=$3; out_md=$4; out_err=$5; home_base=${6:-}
