@@ -16,15 +16,21 @@ const a = (() => {
   return v || {}
 })()
 // Plan scope is ALWAYS read-only, overriding the requested trust (a `--spec` is a supplementary
-// flag on the same `--plan` invocation — there is no separate 'spec' scopeType): the reviewed artifact is a
-// document of imperative steps addressed to an implementing agent, so an auto-trust reviewer
-// (Kiro's --trust-all-tools, agy's --dangerously-skip-permissions) is prone to *executing* the plan
-// instead of reviewing it — a Gemini reviewer once scaffolded and committed a plan's build steps into
-// the worktree (2026-06-11); it now runs via agy under the read-only deny lockdown (writes/shell
-// denied) for plan scope. A plan review needs only reads. (committee-loop reviews documents under
-// `--files` and passes --trust=read-only itself; this is the workflow-side guarantee for one-shot
-// `/committee --plan`.)
-const trust = a.scopeType === 'plan' ? 'read-only' : (a.trust === 'read-only' ? 'read-only' : 'auto')
+// flag on the same `--plan` invocation — there is no separate 'spec' scopeType): the reviewed artifact
+// is a document of imperative steps addressed to an implementing agent. As of 2026-06-23, NEITHER trust
+// mode lets a reviewer write or run shell — agy AND Kiro run locked-down in BOTH modes (agy-review.sh's
+// per-mode deny list; Kiro always --trust-tools=fs_read), so "execute the plan" is structurally blocked
+// regardless of trust. Forcing read-only here ADDITIONALLY denies the network/URL exfil tools — the
+// safest posture for untrusted imperative content. (A Gemini reviewer once scaffolded and committed a
+// plan's build steps into the worktree, 2026-06-11; the auto-mode write hole that enabled it — agy's
+// --dangerously-skip-permissions / Kiro's --trust-all-tools — is now closed in both modes.)
+// (committee-loop reviews documents under `--files` and passes --trust=read-only itself; this is the
+// workflow-side guarantee for one-shot `/committee --plan`.) The default is now read-only at BOTH layers
+// — the SKILL.md trust dialog AND this workflow fallback: an omitted/garbage `a.trust` resolves to
+// read-only (FAIL-CLOSED to the safer mode), so `auto` is an explicit opt-in (`a.trust === 'auto'`) for
+// trusted content. (Pre-2026-06-23 this defaulted to `auto`, silently escalating a missing trust to the
+// less-restrictive mode — inconsistent with the new posture; flipped per PR #8 review.)
+const trust = a.scopeType === 'plan' ? 'read-only' : (a.trust === 'auto' ? 'auto' : 'read-only')
 const baseSha = a.baseSha || 'none'
 const headSha = a.headSha || 'none'
 const commitSha = a.commitSha || 'N/A'
@@ -228,11 +234,14 @@ ${trust === 'read-only'
               : `timeout 540 codex exec ${codexCfg} --ephemeral -o ${shq(a.sessionDir)}/codex.md - 2> ${shq(a.sessionDir)}/codex.err <<'P'\nReview the changes between ${baseSha} and ${headSha}: run git diff --stat ${baseSha}..${headSha} then git diff ${baseSha}..${headSha}. Beyond those read-only git diff commands, review by READING only — do NOT execute the repo's scripts or any state-changing command (install/setup/deploy/build/migration scripts, task runners), even to verify feasibility. Output Critical/Important/Minor with file:line.\nP`}`}
 IMPORTANT: \`codex review\` writes its ENTIRE output — including the final review — to STDERR, not stdout. After it runs, on a clean exit, if ${a.sessionDir}/codex.md is empty but ${a.sessionDir}/codex.err is non-empty, the review is in codex.err — read that. (codex exec writes its -o file directly and needs no recovery.) If codex exited non-zero with no review, set ran_ok=false with the reason. Parse the review into findings.`
 
+// Kiro runs read-only (--trust-tools=fs_read) in BOTH trust modes: a reviewer never needs to write or
+// execute, and --trust-all-tools was the Kiro analog of agy's --dangerously-skip-permissions hole — a
+// plan/prompt-injected target an auto-trust Kiro would EXECUTE rather than review. fs_read denies shell,
+// so Kiro reads the precomputed diff (prepare.sh writes diff.txt for EVERY scope) instead of running git;
+// it can still read other repo files for context. Auto vs read-only no longer differ for Kiro.
 const kiroPrompt = `Run the Kiro CLI to review. Read ${a.promptsDir}/reviewers/kiro.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
 Run with a 300000 ms Bash timeout:
-${trust === 'read-only'
-  ? `  cd ${shq(projectRoot)} && timeout 300 kiro-cli chat --no-interactive --trust-tools=fs_read "Read '${dq(a.diffPath)}' (the diff; see '${dq(a.diffStatPath)}' for a file-level summary) and review it. ${dq(cliFraming)}" > ${shq(a.sessionDir)}/kiro.md 2> ${shq(a.sessionDir)}/kiro.err`
-  : `  cd ${shq(projectRoot)} && timeout 300 kiro-cli chat --no-interactive --trust-all-tools "${a.scopeType === 'commit' ? `Review the changes (git show ${dq(commitSha)}).` : (a.scopeType === 'files' || a.scopeType === 'plan' || a.scopeType === 'uncommitted') ? `Read '${dq(a.diffPath)}' (the precomputed changes) and review it.` : `Review the changes (git diff ${dq(baseSha)}..${dq(headSha)}).`} ${dq(cliFraming)}" > ${shq(a.sessionDir)}/kiro.md 2> ${shq(a.sessionDir)}/kiro.err`}
+  cd ${shq(projectRoot)} && timeout 300 kiro-cli chat --no-interactive --trust-tools=fs_read "Read '${dq(a.diffPath)}' (the diff; see '${dq(a.diffStatPath)}' for a file-level summary) and review it. ${dq(cliFraming)}" > ${shq(a.sessionDir)}/kiro.md 2> ${shq(a.sessionDir)}/kiro.err
 ${specNote}
 ${staticNote}
 Parse the output into findings. If it errors or returns nothing, set ran_ok=false with the reason.`
@@ -283,7 +292,7 @@ const agyPipe = (model, outBase) =>
   `bash ${agyScript} ${agyMode} ${shq(model)} ${shq(agyFraming)} ${shq(`${a.sessionDir}/${outBase}.md`)} ${shq(`${a.sessionDir}/${outBase}.err`)} "\$agyhome" || { : > ${shq(`${a.sessionDir}/${outBase}.md`)}; echo 'agy-review: agyPipe setup failed (cd projectRoot / mktemp -d) — reviewer dropped' > ${shq(`${a.sessionDir}/${outBase}.err`)}; }; rm -rf "\$agyhome"`
 
 const geminiPrompt = `Run the Gemini reviewer via the Antigravity CLI (agy). Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
-Run this EXACT command as ONE Bash invocation with a 300000 ms timeout — it pipes the fenced diff into agy-review.sh, which runs \`agy\` with model ${geminiPrimaryModel}${trust === 'read-only' ? ' under a read-only deny lockdown (per-run HOME with a permissions.deny list denying writes/shell/network; auth is copied so the real ~/.gemini is untouched)' : ' with --dangerously-skip-permissions'}:
+Run this EXACT command as ONE Bash invocation with a 300000 ms timeout — it pipes the fenced diff into agy-review.sh, which runs \`agy\` with model ${geminiPrimaryModel}${trust === 'read-only' ? ' under a read-only deny lockdown (per-run HOME with a permissions.deny list denying writes/shell/network; auth is copied so the real ~/.gemini is untouched)' : ' under an auto deny lockdown (per-run HOME with a permissions.deny list denying writes/shell — network reads allowed; NO --dangerously-skip-permissions; auth is copied so the real ~/.gemini is untouched)'}:
   ${agyPipe(geminiPrimaryModel, 'gemini')}
 There is NO fallback for the primary Gemini reviewer. If ${a.sessionDir}/gemini.md is empty after the call, set ran_ok=false with the reason from ${a.sessionDir}/gemini.err (an empty file means agy produced no review — auth/quota/capacity, or a read-only setup skip). Otherwise parse the output into findings.
 ${specNote}
