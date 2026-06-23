@@ -75,10 +75,15 @@ context7 `/google-antigravity/antigravity-cli`, permissions reference).
    and `touch` both succeeded under `--sandbox`). So omitting a flag is NOT read-only, and a missing
    lockdown is a *silent* escalation (unlike gemini, which needed `-y` to act). This is why the
    read-only setup is fail-closed (§2).
-5. **Read-only is enforced by a `permissions.deny` glob list** in
-   `~/.gemini/antigravity-cli/settings.json`:
+5. **Both modes are enforced by a `permissions.deny` glob list** in
+   `~/.gemini/antigravity-cli/settings.json` (UPDATED 2026-06-23: the list is now used in BOTH trust
+   modes, not read-only only — see §2 — and `--dangerously-skip-permissions` is no longer passed in auto).
+   The read-only list:
    `"permissions": { "deny": ["write_file(*)", "edit_file(*)", "replace(*)", "command(*)", "run_command(*)", "read_url(*)", "fetch(*)", "web_search(*)", "browser_action(*)"] }`.
-   Confirmed: writes + shell **blocked**, reads + review still work. Notes: bare tool names do **not**
+   The **auto** list is the same MINUS the four network/URL tools — i.e. the writes+shell **base**
+   (`write_file(*)`/`edit_file(*)`/`replace(*)`/`command(*)`/`run_command(*)`) is denied in BOTH modes, and
+   read-only ADDS the network denials (`read_url(*)`/`fetch(*)`/`web_search(*)`/`browser_action(*)`).
+   Confirmed: writes + shell **blocked** in both modes, reads + review still work. Notes: bare tool names do **not**
    match (the parenthesized glob is required); shell is gated by **`command(*)`** (we ALSO deny
    `run_command(*)` as the second shell vector); an **allow-list alone does not default-deny** — the
    **deny list is load-bearing**, exactly like gemini's `tools.exclude`. **Verified 2026-06-21
@@ -152,18 +157,18 @@ framing are unchanged.
 as a **single `shq`-quoted argv token**, and the helper references it as `"$prompt"` — so it never
 sits inside another double-quoted string and needs **no `dq()` escaping** (this is strictly safer
 than the old `dq()`-inside-double-quotes approach). `dq()` is retained only for the Kiro prompt. All
-paths remain `shq`-quoted; the deny JSON is a fixed literal (no interpolation). (The intricate
-`agy` recipe — auto vs. fail-closed read-only — lives in one tested helper, `prompts/agy-review.sh`;
-`committee-review.js` only wires the scope-conditioned input, model, and framing into it.)
+paths remain `shq`-quoted; the deny JSON is built from a fixed **base** literal (writes+shell) plus, in
+read-only only, the four network/URL tools — see `agy-review.sh`'s `base_deny`/`deny_list`. (The intricate
+`agy` recipe — as of 2026-06-23 BOTH modes are fail-closed per-run-home lockdowns differing ONLY in the
+deny list — lives in one tested helper, `prompts/agy-review.sh`; `committee-review.js` only wires the
+scope-conditioned input, model, and framing into it.)
 
-**Auto mode** (`<env>` empty, `<trustFlag>` = `--dangerously-skip-permissions`):
-
-```
-{ printf '<reviewed_content>\n'; <geminiInput>; printf '\n</reviewed_content>\n'; } \
-  | timeout -k 30 240 agy -p "<shq framing>" --model <id> --dangerously-skip-permissions \
-      > <session>/<out>.md 2> <session>/<out>.err
-cx=$?; if [ "$cx" -ne 0 ]; then : > <session>/<out>.md; echo "agy exited non-zero ($cx)" >> <session>/<out>.err; elif [ ! -s <session>/<out>.md ]; then echo "agy exited 0 but empty — no review (auth/quota/capacity or read-only skip)" >> <session>/<out>.err; fi
-```
+**Auto mode** (2026-06-23: **NO** `--dangerously-skip-permissions` — that flag bypassed the deny gate and
+was the hole that let a prompt-injected/plan diff make Gemini execute the plan). Auto now runs under the
+**same** per-run-home fail-closed lockdown as **Read-only mode** below, with ONE difference: its
+`permissions.deny` array is the writes+shell **base only** —
+`["write_file(*)","edit_file(*)","replace(*)","command(*)","run_command(*)"]` — omitting the four
+network/URL tools (auto allows network reads; read-only denies them). Writes + shell are blocked in both.
 
 An unrecognized mode (anything but `auto`/`read-only`) **fails closed** in the helper: it writes a
 reason to `<out>.err` and never invokes `agy` (no fall-through to the privileged path).
@@ -174,7 +179,8 @@ reason to `<out>.err` and never invokes `agy` (no fall-through to the privileged
 agyHome="$(mktemp -d "${TMPDIR:-/tmp}/committee-agy.XXXXXX")"   # PER-RUN dir OUTSIDE projectRoot (see §6) — keeps copied creds beyond agy's read_file/cwd confinement; removed by a per-call QUOTED EXIT/INT/TERM trap + a trailing rm-rf (trap fires on cancel/SIGTERM; trailing rm fires on the normal path before a retry reassigns the var)
 deny="$agyHome/.gemini/antigravity-cli/settings.json"
 # enableTelemetry/showFeedbackSurvey mirror the real settings so a fresh HOME emits no survey/
-# telemetry text into the review output; the deny block is the load-bearing read-only control.
+# telemetry text into the review output; the deny block is the load-bearing control for BOTH modes
+# (the auto variant uses the same recipe but OMITS the four network/URL tools — see §2 Auto mode).
 if mkdir -p "$agyHome/.gemini/antigravity-cli" \
    && printf '%s' '{"enableTelemetry":false,"showFeedbackSurvey":false,"permissions":{"deny":["write_file(*)","edit_file(*)","replace(*)","command(*)","run_command(*)","read_url(*)","fetch(*)","web_search(*)","browser_action(*)"]}}' > "$deny" \
    && [ -s "$deny" ]; then
@@ -270,11 +276,11 @@ triggers.
   (verified, unlike gemini-cli's), so reads of out-of-repo paths (incl. the relocated `$TMPDIR` creds OR the
   real `~/.gemini`) succeed — this is the **accepted read-exfil risk**, recorded as a Known Limitation in
   CLAUDE.md, NOT a blocking gate. The smoke harness's T5 probe characterizes it as a non-blocking NOTE.
-- **Auto mode caveat (must be documented, not "fixed"):** in auto mode there is **no** deny list, so
-  an `@`-read is an accepted auto-mode risk — the same posture as gemini's `-y` mode. If the test
-  shows agy reads arbitrary out-of-repo paths in auto mode, document it as an accepted auto-mode risk
-  (auto mode already trusts the reviewer with full tools); read-only mode is the safe path for
-  untrusted content.
+- **Auto mode caveat (must be documented, not "fixed"):** as of 2026-06-23 auto ALSO runs under the deny
+  lockdown (writes+shell denied; only the network/URL tools are allowed that read-only denies). So an
+  `@`-read in auto cannot become a write/commit, but — because auto allows the network — it COULD be
+  POSTed to a URL; that is an accepted auto-mode (trusted-content-only) risk. Read-only mode (which also
+  denies the network) is the safe path for untrusted content.
 
 ## §4 Guards (simplified per decisions)
 
@@ -335,9 +341,11 @@ triggers.
 
 ## §6 Risks
 
-- **agy headless auto-acts** — mitigated by the fail-closed deny lockdown (verified) for read-only;
-  auto mode is intentionally permissive (`--dangerously-skip-permissions`), same risk posture as
-  gemini `-y`.
+- **agy headless auto-acts** — mitigated by the fail-closed deny lockdown (verified) in BOTH modes
+  (2026-06-23 update): neither mode passes `--dangerously-skip-permissions`, so writes+shell are denied
+  in auto too; auto only additionally ALLOWS the network/URL tools that read-only denies. (Originally
+  auto was intentionally permissive with `--dangerously-skip-permissions`, same risk posture as gemini
+  `-y` — that permitted Gemini to execute injected/plan content and change code, so it was removed.)
 - **agy quota error format unverified** — mitigated by not depending on it (drop-on-error).
 - **Credential isolation in read-only — SUPERSEDED 2026-06-21 (accept-reads): there is NO read-side
   credential boundary; reads incl. creds are an accepted risk. Network exfil (`read_url`/`fetch`/
@@ -352,9 +360,9 @@ triggers.
   tools by their exact names — enumerated and added during the §7 #6 characterization; do NOT rely on
   a `browser_*(*)` name-glob, since Fact #5 confirms parenthesized arg-globs but NOT tool-NAME
   wildcards. Read-only still permits `read_file`/`grep_search`/`codebase_search` over the REPO. (Auto
-  mode keeps full tools — accepted
-  risk, same posture as gemini `-y`.) The mode's docs must state this residual *read* surface, not
-  claim "no tool access".
+  mode, as of 2026-06-23, denies writes+shell too — it differs only by ALLOWING these network/URL tools;
+  the network channel is the accepted auto-mode trusted-content risk.) The mode's docs must state this
+  residual *read* surface, not claim "no tool access".
 - **Model id drift is NOT auto-mitigated (Verified Fact #9).** Because agy silently substitutes Flash
   for an unknown/retired `--model` id with no failure signal, a retired `gemini-3.1-pro` pin would
   silently downgrade Gemini-Pro to Flash with `ran_ok=true` — collapsing the panel's two-distinct-
@@ -413,10 +421,11 @@ to a gate, A3):
    re-run-smoke-on-upgrade note and the §7 #6(c) browser/URL-tool enumeration.)
 2. **Fail-closed.** With the deny file made unwritable (simulated setup failure), the reviewer
    produces empty `.md`, reports `ran_ok=false`, and `agy` is never invoked.
-3. **Auto mode.** An auto-mode call (`--dangerously-skip-permissions`) produces output. The smoke
-   harness exercises this with a **single** auto call — both reviewers share the one `agy-review.sh`
-   auto path, so one call certifies the mode; the live `/committee` run (Task 8 Step 5) exercises both
-   reviewers end-to-end.
+3. **Auto mode.** An auto-mode call produces output under its (writes+shell-denying, network-allowing)
+   lockdown — **no** `--dangerously-skip-permissions` (2026-06-23 update). The smoke harness exercises
+   this with a **single** auto call plus a §7 #1b assertion that auto ALSO blocks the planted write+shell;
+   both reviewers share the one `agy-review.sh` auto path, so one call certifies the mode; the live
+   `/committee` run (Task 8 Step 5) exercises both reviewers end-to-end.
 4. **Pro→Flash retry (verified manually — needs fault injection, not in the smoke harness).** Inject a
    fault that ACTUALLY produces the failure signal (empty `.md` or non-zero exit) — e.g. temporarily
    make the Gemini-Pro per-run HOME's OAuth invalid/unreadable so the primary agy call fails auth and

@@ -16,7 +16,7 @@ The committee report is advisory. After presenting it, WAIT. Do NOT say "let me 
 - About to re-resolve scope in the workflow → STOP, the skill is the source of truth
 - About to sanitize adversarial user input → STOP, reject with a message instead
 - About to splice a user path/keyword directly into bash → STOP, use file-first via the Write tool
-- About to skip the trust dialog without `--trust` flag → STOP, it gates reviewer shell access
+- About to skip the trust dialog without `--trust` flag → STOP, present it (default is read-only; auto must be an explicit opt-in for trusted content — it relaxes Gemini's network access + Codex's sandbox, though no reviewer can write/execute in either mode)
 </red_flags>
 
 ## Input parsing
@@ -123,14 +123,14 @@ A single commit is ~5–8 min; a large sha_range is ~8–10 min.
 If `--trust=<level>` was parsed above, use that value directly and skip the interactive dialog.
 
 Otherwise, call the `AskUserQuestion` tool with:
-- **Question:** `What access level should CLI reviewers (Kiro, Gemini) have?`
+- **Question:** `What access level should the CLI reviewers (Gemini, Codex) have? (Gemini and Kiro can never write or run shell in either mode — this choice only affects Gemini's network access and Codex's sandbox.)`
 - **Header:** `Trust level`
-- **Option 1** — `Auto Mode (Recommended)` — `Reviewers run autonomously with auto-approval flags (shell + tool access). The Claude reviewer inherits the parent session's auto-mode classifier; CLI reviewers (Kiro, Gemini) run with their own auto-approval flags — Gemini runs via 'agy --dangerously-skip-permissions' (full tools). Matches the harness's auto permission mode.`
-- **Option 2** — `Read-only` — `Reviewers run under a lockdown. Gemini runs via 'agy' under a per-run-HOME permissions.deny lockdown: repo reads allowed, but writes, shell, AND URL/network fetch denied (fail-closed). Not exfil-safe — agy's reads are not filesystem-confined, so a prompt-injected diff could read local files and echo them into the review output (accepted risk). Safer for untrusted code.`
+- **Option 1** — `Read-only (Recommended)` — `Safest; use for untrusted code. Gemini (agy) and Kiro run under a per-run-HOME permissions.deny lockdown — repo reads allowed, but writes, shell, AND URL/network fetch denied (fail-closed); Codex runs '--sandbox read-only'. Not exfil-safe: agy's reads are not filesystem-confined, so a prompt-injected diff could read local files and echo them into the review output (accepted risk).`
+- **Option 2** — `Auto Mode` — `For TRUSTED content only. Relaxes the lockdown: Gemini (agy) may additionally use the network/web, and Codex follows your codex config's sandbox (which can allow writes if you widened it). Gemini and Kiro STILL cannot write to or run commands in your repo — writes/shell are denied in BOTH modes. The Claude reviewer inherits the parent session's auto-mode classifier either way.`
 
-**Note for plan scope:** if the scope is `plan` (`--plan`/`--spec`), the workflow forces read-only regardless of the answer here (a plan document is imperative instructions an auto-trust reviewer could execute) — so for plan scope this dialog does not change reviewer write access. You may still present it (harmless), or just tell the user plan reviews always run read-only.
+**Note for plan scope:** if the scope is `plan` (`--plan`/`--spec`), the workflow forces read-only regardless of the answer here. (As of 2026-06-23 no reviewer can write or execute in either mode anyway; forcing read-only for a plan additionally denies the network/URL exfil channel — the safest posture for untrusted imperative content.) You may still present the dialog (harmless), or just tell the user plan reviews always run read-only.
 
-Record the answer as `auto` or `read-only`. Default to `auto` if unanswered or on tool failure.
+Record the answer as `auto` or `read-only`. Default to `read-only` if unanswered or on tool failure.
 
 The value you record here is what you pass as the `trust` field in the workflow `args` object below (the **Dispatch the review workflow** section).
 
