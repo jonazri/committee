@@ -6,6 +6,15 @@ context-compression proxy into `/committee` and `/committee-loop` so the Claude-
 token usage on the dominant cost center. Scope decision (operator, 2026-06-28): **Claude-side only** —
 Codex/Kiro/Gemini stay on their native backends.
 
+**REVISION (2026-06-28, during implementation — SUPERSEDES every `--no-serena` mention below).** Live
+testing showed `headroom wrap claude --no-serena` *removes* Serena from the user's **global**
+`~/.claude.json` (a persistent change, with a "restart Claude Code" notice) rather than scoping to the
+launch. `--no-serena` was therefore **dropped**: the implemented wrap is plain
+`headroom wrap claude -- <claude args>`, which keeps the Headroom MCP registered (so `headroom_retrieve`
+works) and is idempotent for a user who already has Serena — it never removes it. Wherever this spec
+says "pass `--no-serena`" or explains it, read it as "do **not** pass `--no-serena`"; the rest of each
+such statement (keep the Headroom MCP, rely on `--tool-search`'s default) still holds.
+
 ## Problem
 
 Committee spends the bulk of its tokens on **Claude-side** work:
@@ -93,7 +102,7 @@ build_inner_launch() {
     # --no-serena: inner agent doesn't use Serena. Keep the Headroom MCP default
     # so headroom_retrieve is available. Rely on --tool-search's default (true).
     # `--` delimits wrap options from claude args.
-    printf '%s' "headroom wrap claude --no-serena -- $claude_args"
+    printf '%s' "headroom wrap claude -- $claude_args"
   else
     printf '%s' "claude $claude_args"
   fi
@@ -104,7 +113,7 @@ Resulting launch matrix:
 
 | Condition | Launch (inside tmux) |
 |---|---|
-| `headroom` on PATH **and** `COMMITTEE_HEADROOM != off` | `headroom wrap claude --no-serena -- --dangerously-skip-permissions <INNER_LAUNCH_EXTRA>` |
+| `headroom` on PATH **and** `COMMITTEE_HEADROOM != off` | `headroom wrap claude -- --dangerously-skip-permissions <INNER_LAUNCH_EXTRA>` |
 | otherwise | `claude --dangerously-skip-permissions <INNER_LAUNCH_EXTRA>` (unchanged) |
 
 Notes:
@@ -169,7 +178,7 @@ The coordinator is the operator's live session, which committee cannot re-wrap. 
    `scripts/agy-smoke-test.sh`): source `build_inner_launch`, stub `headroom` present/absent and
    `COMMITTEE_HEADROOM=off`, assert the launch string in all three cases (wrapped / opted-out / not
    installed). Pure function, no tmux/worktree side effects.
-2. **Live wrap probe:** `headroom wrap claude --no-serena -- -p "reply OK"` answers through the proxy
+2. **Live wrap probe:** `headroom wrap claude -- -p "reply OK"` answers through the proxy
    and `headroom doctor`/stats show fresh traffic. Confirms the wrap+reuse path and `--no-serena`.
 3. **End-to-end loop:** one short `/committee-loop` run on a trivial target — the inner session comes
    up wrapped (readiness poll still catches the TUI footer under wrap), the loop progresses, and

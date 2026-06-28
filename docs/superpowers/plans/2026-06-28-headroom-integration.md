@@ -9,6 +9,8 @@
 **Tech Stack:** Bash (`spawn.sh`, smoke test), Markdown skill/prompt files, the `headroom` CLI (v0.27.0), Claude Code skills/workflows.
 
 > **Revised 2026-06-28 after committee plan-review (quorum 5/5, zero Critical).** All fixes were to verification scaffolding, not the core design: exact-path glob-free e2e teardown using `spawn.sh`'s stdout manifest (Task 4); hermetic smoke-test PATH guard (Task 1); 4-backtick outer fences (Task 3); case-insensitive opt-out + a Headroom hint on readiness failure (Task 1); tightened routing detection (Task 3).
+>
+> **REVISION 2 (2026-06-28, during implementation — SUPERSEDES every `--no-serena` mention below):** live testing showed `headroom wrap claude --no-serena` *removes* Serena from the user's **global** `~/.claude.json` (a persistent side effect, with a "restart Claude Code" notice) rather than scoping to the launch. So `--no-serena` was **dropped**: the actual wrap is plain **`headroom wrap claude -- <claude args>`**, which keeps the Headroom MCP (for `headroom_retrieve`) and is idempotent for a user who already has Serena — it never removes it. Any `--no-serena` still shown in a code comment or rationale below is historical and superseded by this note.
 
 ## Global Constraints
 
@@ -16,7 +18,7 @@
 - **Claude-side only.** Do not route Codex (`headroom wrap codex` rewires auth + mutates `~/.codex/config.toml`), Kiro (AWS Q — not Anthropic/OpenAI-compatible), or Gemini (`agy`/Cloud Code Assist — not Anthropic/OpenAI-compatible). No changes to `committee-review.js` dispatch, `prepare.sh`, `static-prepass.sh`, `agy-review.sh`, or the Codex/Kiro/Gemini reviewer paths.
 - **Graceful no-op.** With `headroom` off PATH OR `COMMITTEE_HEADROOM` set to `off` (any case), behavior is byte-identical to today.
 - **`headroom` is optional** — do NOT add it to `spawn.sh`'s required-tool preflight loop.
-- **Exact wrap invocation:** `headroom wrap claude --no-serena -- <claude args>`. `--no-serena` (inner agent doesn't use Serena; also sidesteps an error on hosts without Serena). Keep the Headroom MCP default (so `headroom_retrieve` is available). Do NOT pass `--tool-search` (rely on its default `true`; passing it couples us to the flag's existence). Headroom reuses a running proxy by default — do NOT pass `--no-proxy`.
+- **Exact wrap invocation:** `headroom wrap claude -- <claude args>`. Do NOT pass `--no-serena` — it *removes* Serena from the user's global `~/.claude.json` (verified during implementation, 2026-06-28), not just for this launch. Keep the Headroom MCP default (so `headroom_retrieve` is available); plain wrap is idempotent for a user who already has Serena and never removes it. Do NOT pass `--tool-search` (rely on its default `true`; passing it couples us to the flag's existence). Headroom reuses a running proxy by default — do NOT pass `--no-proxy`.
 - **Opt-out var:** `COMMITTEE_HEADROOM` — value `off` (case-insensitive) means "do not wrap"; anything else (incl. unset) means "auto" (wrap when installed).
 
 ---
@@ -28,7 +30,7 @@
 - Modify: `.claude/skills/committee-loop/spawn.sh` (insert helper+hook after line 27; replace launch at lines 373–374; add a Headroom hint to the readiness-failure block ~lines 393–404 and widen the poll at line 378)
 
 **Interfaces:**
-- Produces: `build_inner_launch "<claude-args-string>"` → prints `headroom wrap claude --no-serena -- <claude-args-string>` when `headroom` is on PATH and `COMMITTEE_HEADROOM` is not `off` (case-insensitive), else `claude <claude-args-string>`. Pure (depends only on `$1` + `PATH` + `COMMITTEE_HEADROOM`).
+- Produces: `build_inner_launch "<claude-args-string>"` → prints `headroom wrap claude -- <claude-args-string>` when `headroom` is on PATH and `COMMITTEE_HEADROOM` is not `off` (case-insensitive), else `claude <claude-args-string>`. Pure (depends only on `$1` + `PATH` + `COMMITTEE_HEADROOM`).
 - Produces: `spawn.sh --print-inner-launch "<claude-args-string>"` → prints `build_inner_launch "<args>"` + newline and exits 0, before any preflight/worktree/tmux work (side-effect-free self-test hook).
 
 - [ ] **Step 1: Write the failing smoke test**
@@ -62,7 +64,7 @@ BASEPATH="$STUB:/usr/bin:/bin"
 # Case 1: headroom installed -> wrapped
 printf '#!/bin/sh\nexit 0\n' > "$STUB/headroom"; chmod +x "$STUB/headroom"
 got=$(PATH="$BASEPATH" bash "$SPAWN" --print-inner-launch "$ARGS")
-check "$got" "headroom wrap claude --no-serena -- $ARGS" "headroom installed -> wrapped launch"
+check "$got" "headroom wrap claude -- $ARGS" "headroom installed -> wrapped launch"
 
 # Case 2: opt-out via COMMITTEE_HEADROOM=OFF (case-insensitive) -> bare claude
 got=$(PATH="$BASEPATH" COMMITTEE_HEADROOM=OFF bash "$SPAWN" --print-inner-launch "$ARGS")
@@ -116,7 +118,7 @@ build_inner_launch() {
   local claude_args="$1" optout=no
   case "${COMMITTEE_HEADROOM:-auto}" in [Oo][Ff][Ff]) optout=yes ;; esac
   if [ "$optout" = no ] && command -v headroom >/dev/null 2>&1; then
-    printf '%s' "headroom wrap claude --no-serena -- $claude_args"
+    printf '%s' "headroom wrap claude -- $claude_args"
   else
     printf '%s' "claude $claude_args"
   fi
@@ -304,7 +306,7 @@ Insert this new section immediately after the "## Architectural Notes" section (
 
 When the [Headroom](https://headroom-docs.vercel.app) CLI (`headroom`) is installed, committee routes its **Claude-side** work through Headroom's context-compression proxy to cut token usage:
 
-- **committee-loop:** `spawn.sh`'s `build_inner_launch` launches the detached inner coordinator via `headroom wrap claude --no-serena -- <claude args>` (reuses a running proxy, or starts one). Because in-harness subagents inherit the session's `ANTHROPIC_BASE_URL`, this routes the coordinator **and** the `/committee` Claude reviewer **and** all five per-reviewer verifiers automatically. Set `COMMITTEE_HEADROOM=off` (case-insensitive) to force bare `claude`. `--no-serena` skips Serena registration (unused, and sidesteps an error on hosts without Serena); the Headroom MCP stays registered so `headroom_retrieve` is available; `--tool-search` keeps its default `true` so Claude Code's deferred tool-loading is preserved (a custom `ANTHROPIC_BASE_URL` otherwise makes Claude Code eagerly load every tool schema — Headroom issue #746). If a wrapped inner session won't come up, `spawn.sh` prints a hint pointing at the `COMMITTEE_HEADROOM=off` opt-out.
+- **committee-loop:** `spawn.sh`'s `build_inner_launch` launches the detached inner coordinator via `headroom wrap claude -- <claude args>` (reuses a running proxy, or starts one). Because in-harness subagents inherit the session's `ANTHROPIC_BASE_URL`, this routes the coordinator **and** the `/committee` Claude reviewer **and** all five per-reviewer verifiers automatically. Set `COMMITTEE_HEADROOM=off` (case-insensitive) to force bare `claude`. `--no-serena` skips Serena registration (unused, and sidesteps an error on hosts without Serena); the Headroom MCP stays registered so `headroom_retrieve` is available; `--tool-search` keeps its default `true` so Claude Code's deferred tool-loading is preserved (a custom `ANTHROPIC_BASE_URL` otherwise makes Claude Code eagerly load every tool schema — Headroom issue #746). If a wrapped inner session won't come up, `spawn.sh` prints a hint pointing at the `COMMITTEE_HEADROOM=off` opt-out.
 - **one-shot `/committee`:** the coordinator is your live session, which committee can't re-wrap — launch it yourself via `headroom wrap claude` to route the Claude reviewer + verifiers. The skill detects (`ANTHROPIC_BASE_URL` pointing at the Headroom port + `headroom` on PATH) and reports routing status; behavior is identical either way.
 - **What does NOT route, and why:** Codex (`headroom wrap codex` rewires its auth and persistently mutates `~/.codex/config.toml` — risks dropping the reviewer below quorum), Kiro (AWS Q, `q.us-east-1.amazonaws.com`), and Gemini (`agy` / Google Cloud Code Assist) are not Anthropic/OpenAI-compatible, so a Headroom Anthropic/OpenAI proxy physically cannot carry them. They stay on their native backends.
 - **Compression is non-destructive.** Reviewers/verifiers navigate cheaply on the compressed view and expand the raw bytes via the `headroom_retrieve` MCP tool for final claim verification (see `prompts/verifier.md`). committee's existing verify-stage + quorum backstop any fidelity loss.
@@ -340,9 +342,9 @@ git commit -m "docs(committee): document headroom integration + one-shot routing
 
 - [ ] **Step 1: Confirm the live wrap path works**
 
-Run (proves `headroom wrap claude --no-serena` answers through the proxy; the printed `OK` is the real signal — do not depend on `headroom doctor`'s JSON schema):
+Run (proves `headroom wrap claude` answers through the proxy; the printed `OK` is the real signal — do not depend on `headroom doctor`'s JSON schema):
 ```bash
-headroom wrap claude --no-serena -- -p "reply with the single word OK"
+headroom wrap claude -- -p "reply with the single word OK"
 ```
 Expected: claude prints `OK`. If it errors specifically on `--no-serena`, STOP and report — a Headroom version without that flag means the integration's flag set must be re-evaluated. (Optional, best-effort: `headroom doctor` afterward should show the proxy healthy; its exact output schema is not asserted.)
 
@@ -364,7 +366,7 @@ eval "$(printf '%s\n' "$MANIFEST" | grep -E '^(SESSION|WORKTREE_PATH|BRANCH|COMM
 START_CMD=$(command tmux -L "$COMMITTEE_SOCKET" list-panes -t "$SESSION" -F '#{pane_start_command}' 2>/dev/null)
 printf 'pane start command: %s\n' "$START_CMD"
 case "$START_CMD" in
-  *"headroom wrap claude --no-serena"*) echo "E2E PASS: inner session is Headroom-wrapped" ;;
+  *"headroom wrap claude"*) echo "E2E PASS: inner session is Headroom-wrapped" ;;
   *) echo "E2E FAIL: inner session not wrapped (got: $START_CMD)" ;;
 esac
 
@@ -398,4 +400,4 @@ Expected: `ALL SMOKE CHECKS PASSED` + `OK`. No commit (verification only).
 
 **Placeholder scan:** No TBD/TODO; all code blocks complete; the only `<…>` are literal argument placeholders inside shown commands. ✓
 
-**Type/name consistency:** `build_inner_launch`, `--print-inner-launch`, `COMMITTEE_HEADROOM`, `INNER_LAUNCH`, `INNER_WRAPPED`, and the exact wrap string `headroom wrap claude --no-serena -- …` are used identically across Tasks 1, 3, 4 and the smoke test. ✓
+**Type/name consistency:** `build_inner_launch`, `--print-inner-launch`, `COMMITTEE_HEADROOM`, `INNER_LAUNCH`, `INNER_WRAPPED`, and the exact wrap string `headroom wrap claude -- …` are used identically across Tasks 1, 3, 4 and the smoke test. ✓

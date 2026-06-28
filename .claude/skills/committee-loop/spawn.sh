@@ -430,7 +430,7 @@ done
 if ! $READY; then
   echo "error: Claude input box did not render within 45s; aborting" >&2
   if [ "${INNER_WRAPPED:-0}" = 1 ]; then
-    echo "hint: the inner session was launched via 'headroom wrap claude'. If Headroom is the cause (proxy unreachable, or a headroom version without --no-serena), re-run with COMMITTEE_HEADROOM=off to bypass it." >&2
+    echo "hint: the inner session was launched via 'headroom wrap claude'. If Headroom is the cause (proxy unreachable, or 'headroom wrap claude' failing to start), re-run with COMMITTEE_HEADROOM=off to bypass it." >&2
   fi
   # Dump captured pane so a TUI footer-wording change (or unexpected prompt)
   # is diagnosable without attaching to a killed tmux session.
