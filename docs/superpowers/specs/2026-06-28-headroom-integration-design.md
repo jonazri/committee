@@ -71,8 +71,9 @@ and reviewers through Headroom when it is present, using `headroom wrap claude`.
    Claude Code eagerly load every tool schema and bloat context (Headroom issue #746). We rely on the
    default and do **not** pass the flag (passing it would couple us to its continued existence).
 4. `headroom wrap claude` registers the Headroom MCP server (and Serena) by default. We keep the
-   Headroom MCP (so `headroom_retrieve` is available for lossless expansion) and pass `--no-serena`
-   (the inner agent doesn't use Serena).
+   Headroom MCP (so `headroom_retrieve` is available for lossless expansion) and do **not** pass
+   `--no-serena` — that flag removes Serena from the user's global `~/.claude.json` (a persistent
+   side effect, found during implementation); plain wrap never removes it.
 5. Headroom compression is **non-destructive**; `headroom_retrieve` returns the original bytes for any
    compression marker (`[N items compressed… hash=…]`). Reviewers can navigate cheaply on the
    compressed view and pull raw bytes only for final verification.
@@ -99,8 +100,8 @@ build_inner_launch() {
   local claude_args="$1"   # e.g. "--dangerously-skip-permissions --effort high"
   if [ "${COMMITTEE_HEADROOM:-auto}" != "off" ] && command -v headroom >/dev/null 2>&1; then
     # `headroom wrap claude` reuses a running proxy (starts one if absent).
-    # --no-serena: inner agent doesn't use Serena. Keep the Headroom MCP default
-    # so headroom_retrieve is available. Rely on --tool-search's default (true).
+    # Do NOT pass --no-serena (it removes the user's global Serena). Keep the
+    # Headroom MCP default so headroom_retrieve is available. Rely on --tool-search's default (true).
     # `--` delimits wrap options from claude args.
     printf '%s' "headroom wrap claude -- $claude_args"
   else
@@ -152,7 +153,7 @@ The coordinator is the operator's live session, which committee cannot re-wrap. 
 - **CLAUDE.md:** a "Headroom integration" note covering what routes (Claude coordinator + Claude
   reviewer + 5 verifiers), what doesn't and *why* (Codex risk; Kiro=AWS Q, Gemini=agy not
   Anthropic/OpenAI-compatible), the `COMMITTEE_HEADROOM=off` opt-out, the proxy-reuse behavior, and the
-  `--tool-search`/`--no-serena` rationale.
+  `--tool-search` rationale and why `--no-serena` is deliberately not used.
 - **committee SKILL.md / committee-loop SKILL.md:** the one-shot "wrap your session" tip and the
   loop's auto-wrap behavior + opt-out.
 
@@ -179,7 +180,7 @@ The coordinator is the operator's live session, which committee cannot re-wrap. 
    `COMMITTEE_HEADROOM=off`, assert the launch string in all three cases (wrapped / opted-out / not
    installed). Pure function, no tmux/worktree side effects.
 2. **Live wrap probe:** `headroom wrap claude -- -p "reply OK"` answers through the proxy
-   and `headroom doctor`/stats show fresh traffic. Confirms the wrap+reuse path and `--no-serena`.
+   and `headroom doctor`/stats show fresh traffic. Confirms the wrap+reuse path.
 3. **End-to-end loop:** one short `/committee-loop` run on a trivial target — the inner session comes
    up wrapped (readiness poll still catches the TUI footer under wrap), the loop progresses, and
    findings parity vs. an unwrapped run is sane (lossless-retrieve backstop holds).
@@ -196,4 +197,4 @@ The coordinator is the operator's live session, which committee cannot re-wrap. 
   (criterion 3) is the sanity gate.
 - **MCP registration side effects.** `wrap claude` may register the Headroom MCP into config; for the
   ephemeral worktree this is discarded with it, and Headroom MCP registration is idempotent for an
-  operator already running Headroom. `--no-serena` avoids adding Serena.
+  operator already running Headroom. We do not pass `--no-serena` (it would remove the operator's global Serena).

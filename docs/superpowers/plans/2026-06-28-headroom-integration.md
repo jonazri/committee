@@ -106,12 +106,13 @@ Insert this block immediately AFTER line 27 (the `trap 'cleanup_on_error 130' IN
 # per-reviewer verifiers) route through Headroom's compression proxy. Headroom
 # reuses an already-running proxy by default (starts one if absent). Otherwise
 # launch bare `claude`, byte-identical to the pre-integration behavior.
-#   --no-serena : the inner agent never uses Serena — skip registering it (also
-#                 sidesteps an error on hosts without Serena installed). The
-#                 Headroom MCP stays registered (default) so `headroom_retrieve`
-#                 is available; --tool-search keeps its default `true` (deferred
-#                 tool-loading) — do not pass it. `--` delimits wrap's options
-#                 from the claude args that follow.
+# We deliberately do NOT pass `--no-serena`: that flag REMOVES Serena from the
+# user's *global* ~/.claude.json (verified 2026-06-28 — a persistent, surprising
+# side effect), not just from this launch. Plain `headroom wrap claude` keeps the
+# Headroom MCP registered (default) so `headroom_retrieve` is available for lossless
+# retrieval, and is idempotent for a user who already has Serena (it never removes
+# it). --tool-search keeps its default `true` (deferred tool-loading) — do not pass
+# it. `--` delimits wrap's own options from the claude args that follow.
 # Pure: output depends only on $1 + PATH + COMMITTEE_HEADROOM, no side effects,
 # so the --print-inner-launch self-test hook can exercise it.
 build_inner_launch() {
@@ -174,7 +175,7 @@ to:
 if ! $READY; then
   echo "error: Claude input box did not render within 45s; aborting" >&2
   if [ "${INNER_WRAPPED:-0}" = 1 ]; then
-    echo "hint: the inner session was launched via 'headroom wrap claude'. If Headroom is the cause (proxy unreachable, or a headroom version without --no-serena), re-run with COMMITTEE_HEADROOM=off to bypass it." >&2
+    echo "hint: the inner session was launched via 'headroom wrap claude'. If Headroom is the cause (proxy unreachable, or 'headroom wrap claude' failing to start), re-run with COMMITTEE_HEADROOM=off to bypass it." >&2
   fi
 ```
 
@@ -306,7 +307,7 @@ Insert this new section immediately after the "## Architectural Notes" section (
 
 When the [Headroom](https://headroom-docs.vercel.app) CLI (`headroom`) is installed, committee routes its **Claude-side** work through Headroom's context-compression proxy to cut token usage:
 
-- **committee-loop:** `spawn.sh`'s `build_inner_launch` launches the detached inner coordinator via `headroom wrap claude -- <claude args>` (reuses a running proxy, or starts one). Because in-harness subagents inherit the session's `ANTHROPIC_BASE_URL`, this routes the coordinator **and** the `/committee` Claude reviewer **and** all five per-reviewer verifiers automatically. Set `COMMITTEE_HEADROOM=off` (case-insensitive) to force bare `claude`. `--no-serena` skips Serena registration (unused, and sidesteps an error on hosts without Serena); the Headroom MCP stays registered so `headroom_retrieve` is available; `--tool-search` keeps its default `true` so Claude Code's deferred tool-loading is preserved (a custom `ANTHROPIC_BASE_URL` otherwise makes Claude Code eagerly load every tool schema — Headroom issue #746). If a wrapped inner session won't come up, `spawn.sh` prints a hint pointing at the `COMMITTEE_HEADROOM=off` opt-out.
+- **committee-loop:** `spawn.sh`'s `build_inner_launch` launches the detached inner coordinator via `headroom wrap claude -- <claude args>` (reuses a running proxy, or starts one). Because in-harness subagents inherit the session's `ANTHROPIC_BASE_URL`, this routes the coordinator **and** the `/committee` Claude reviewer **and** all five per-reviewer verifiers automatically. Set `COMMITTEE_HEADROOM=off` (case-insensitive) to force bare `claude`. The Headroom MCP stays registered (default) so `headroom_retrieve` is available; we deliberately do **not** pass `--no-serena` — that flag *removes* Serena from your global `~/.claude.json` (a persistent side effect, verified 2026-06-28), whereas plain `headroom wrap claude` is idempotent for a user who already has Serena and never removes it. `--tool-search` keeps its default `true` so Claude Code's deferred tool-loading is preserved (a custom `ANTHROPIC_BASE_URL` otherwise makes Claude Code eagerly load every tool schema — Headroom issue #746). If a wrapped inner session won't come up, `spawn.sh` prints a hint pointing at the `COMMITTEE_HEADROOM=off` opt-out.
 - **one-shot `/committee`:** the coordinator is your live session, which committee can't re-wrap — launch it yourself via `headroom wrap claude` to route the Claude reviewer + verifiers. The skill detects (`ANTHROPIC_BASE_URL` pointing at the Headroom port + `headroom` on PATH) and reports routing status; behavior is identical either way.
 - **What does NOT route, and why:** Codex (`headroom wrap codex` rewires its auth and persistently mutates `~/.codex/config.toml` — risks dropping the reviewer below quorum), Kiro (AWS Q, `q.us-east-1.amazonaws.com`), and Gemini (`agy` / Google Cloud Code Assist) are not Anthropic/OpenAI-compatible, so a Headroom Anthropic/OpenAI proxy physically cannot carry them. They stay on their native backends.
 - **Compression is non-destructive.** Reviewers/verifiers navigate cheaply on the compressed view and expand the raw bytes via the `headroom_retrieve` MCP tool for final claim verification (see `prompts/verifier.md`). committee's existing verify-stage + quorum backstop any fidelity loss.
@@ -346,7 +347,7 @@ Run (proves `headroom wrap claude` answers through the proxy; the printed `OK` i
 ```bash
 headroom wrap claude -- -p "reply with the single word OK"
 ```
-Expected: claude prints `OK`. If it errors specifically on `--no-serena`, STOP and report — a Headroom version without that flag means the integration's flag set must be re-evaluated. (Optional, best-effort: `headroom doctor` afterward should show the proxy healthy; its exact output schema is not asserted.)
+Expected: claude prints `OK`, confirming Claude launches through the proxy and the running proxy is reused. (Optional, best-effort: `headroom doctor` afterward should show the proxy healthy; its exact output schema is not asserted.)
 
 - [ ] **Step 2: End-to-end committee-loop spawn on an EXISTING file, with exact-path teardown**
 
@@ -359,8 +360,11 @@ This proves the detached inner session comes up *wrapped* and that `spawn.sh`'s 
 # Spawn a real loop session against an existing small file; capture the manifest
 # spawn.sh prints to stdout (%q-escaped KEY=value lines, sourceable).
 MANIFEST=$(bash .claude/skills/committee-loop/spawn.sh prompts/verifier.md) || { echo "spawn failed"; printf '%s\n' "$MANIFEST"; exit 1; }
-# Pull ONLY the exact names we need (each line is `KEY=<%q-value>`).
-eval "$(printf '%s\n' "$MANIFEST" | grep -E '^(SESSION|WORKTREE_PATH|BRANCH|COMMITTEE_SOCKET)=')"
+# Pull ONLY the exact names we need (each line is `KEY=<%q-value>`). The manifest
+# emits SESSION/WORKTREE_PATH/BRANCH but NOT the tmux socket; committee-loop's
+# socket is the fixed literal `committee-loop` (spawn.sh: COMMITTEE_SOCKET="committee-loop").
+eval "$(printf '%s\n' "$MANIFEST" | grep -E '^(SESSION|WORKTREE_PATH|BRANCH)=')"
+COMMITTEE_SOCKET=committee-loop
 
 # Assert the detached pane's start command is the wrapped launch.
 START_CMD=$(command tmux -L "$COMMITTEE_SOCKET" list-panes -t "$SESSION" -F '#{pane_start_command}' 2>/dev/null)
