@@ -118,6 +118,24 @@ Before dispatching reviewers, tell the user the review has started and give a du
 
 A single commit is ~5–8 min; a large sha_range is ~8–10 min.
 
+**Headroom routing (informational, optional).** committee can't wrap its own live session, but if you launched this session via `headroom wrap claude`, the Claude reviewer + all verifiers already route through Headroom (they inherit the session's `ANTHROPIC_BASE_URL`). Detect and report it — run:
+
+```bash
+HR_PORT="${HEADROOM_PORT:-8787}"
+if [ -n "${ANTHROPIC_BASE_URL:-}" ] && command -v headroom >/dev/null 2>&1; then
+  case "$ANTHROPIC_BASE_URL" in
+    *":$HR_PORT"*) echo "routed-confirmed" ;;   # base URL points at the Headroom proxy port
+    *)             echo "routed-maybe" ;;        # custom base URL, but not the Headroom port
+  esac
+fi
+```
+
+- `routed-confirmed`: tell the user "Claude reviewer + verifiers are routing through Headroom ✓ (your session is wrapped)."
+- `routed-maybe`: tell the user "A custom Anthropic base URL is set; if you launched via `headroom wrap claude`, the Claude reviewer + verifiers route through Headroom."
+- neither (no output): tell the user "(tip: launch your session via `headroom wrap claude` to route committee's Claude-side reviewers through Headroom — Codex/Kiro/Gemini stay native.)"
+
+This changes nothing about the review itself — it is purely a status line.
+
 ## Trust level dialog
 
 If `--trust=<level>` was parsed above, use that value directly and skip the interactive dialog.
