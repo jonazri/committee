@@ -237,6 +237,35 @@ is_in_written() {
   return 1
 }
 
+# Partition WRITTEN into targets git can actually commit vs. gitignored-AND-
+# untracked ones. `git add -- <pathspec>` (no -f) EXITS 1 under set -e on an
+# ignored, untracked path — and on a MIXED pathspec it stages NOTHING and still
+# exits 1 (verified git 2.43), so a single gitignored target (e.g. a
+# `committee-loop` over a docs/plans/*.md plan, which is gitignored) would abort
+# post.sh before DONE/teardown AND block committing the tracked targets beside
+# it. The reviewed bytes are already in origin's working tree (mv -f above); the
+# file is deliberately gitignored, so we skip add/commit for it rather than force
+# it into history with -f.
+#
+# Predicate is "ignored AND untracked", not just "ignored": a TRACKED file that
+# also matches an ignore rule is still committable (git add re-adds tracked files
+# without -f — verified), so excluding it would silently drop a real change.
+# Both probes run inside `if` so their nonzero exits don't trip set -e
+# (check-ignore -q: 0=ignored,1=not; ls-files --error-unmatch: 0=tracked,1=not).
+declare -a COMMITTABLE=()
+declare -a SKIPPED_IGNORED=()
+for rel in "${WRITTEN[@]}"; do
+  if git -C "$ORIGIN_PATH" check-ignore -q -- "$rel" \
+     && ! git -C "$ORIGIN_PATH" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+    SKIPPED_IGNORED+=( "$rel" )
+  else
+    COMMITTABLE+=( "$rel" )
+  fi
+done
+if [ "${#SKIPPED_IGNORED[@]}" -gt 0 ]; then
+  echo "note: gitignored+untracked target(s) copied to origin's working tree but NOT git-committed: ${SKIPPED_IGNORED[*]}" >&2
+fi
+
 # Staged paths via NUL-delimited output — handles filenames with newlines /
 # tabs / non-ASCII (git default quotes such paths with C-escapes otherwise,
 # which splits on newlines and confuses parsing).
@@ -244,7 +273,7 @@ is_in_written() {
 # Inlined at both call sites instead of a helper using `local -n`, which
 # requires bash 4.3+ and breaks on macOS stock bash 3.2.57. Portable across
 # bash 3.2+.
-if [ "${#WRITTEN[@]}" -gt 0 ]; then
+if [ "${#COMMITTABLE[@]}" -gt 0 ]; then
   declare -a PRE_STAGED_ARR=()
   while IFS= read -r -d '' staged_path; do
     [ -n "$staged_path" ] && PRE_STAGED_ARR+=( "$staged_path" )
@@ -265,8 +294,8 @@ if [ "${#WRITTEN[@]}" -gt 0 ]; then
   fi
 fi
 
-if [ "${#WRITTEN[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
-  git -C "$ORIGIN_PATH" add -- "${WRITTEN[@]}"
+if [ "${#COMMITTABLE[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
+  git -C "$ORIGIN_PATH" add -- "${COMMITTABLE[@]}"
   # Re-snapshot staged paths immediately after our git add. A concurrent
   # `git add` of an unrelated file in the window between PRE_STAGED_ARR and
   # this point would be swept into the pathspec-free `git commit` below.
@@ -287,15 +316,15 @@ if [ "${#WRITTEN[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
     printf '%s\n' "$EXTRA" >> .committee-loop-BLOCKED.txt
     echo "BLOCKED: $EXTRA" >&2
     # Unstage the paths we added so the user's original staged state is
-    # preserved as much as possible — `git reset HEAD -- WRITTEN` restores
+    # preserved as much as possible — `git reset HEAD -- COMMITTABLE` restores
     # HEAD state for those paths in the index.
-    git -C "$ORIGIN_PATH" reset --quiet HEAD -- "${WRITTEN[@]}" 2>/dev/null || true
+    git -C "$ORIGIN_PATH" reset --quiet HEAD -- "${COMMITTABLE[@]}" 2>/dev/null || true
     SKIP_COMMIT=1
   fi
 fi
 
-if [ "${#WRITTEN[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
-  if ! git -C "$ORIGIN_PATH" diff --cached --quiet -- "${WRITTEN[@]}"; then
+if [ "${#COMMITTABLE[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
+  if ! git -C "$ORIGIN_PATH" diff --cached --quiet -- "${COMMITTABLE[@]}"; then
     # Build a tag list instead of if/elif so multiple conditions (e.g. PARTIAL +
     # BRANCH MOVED for a partial-write run where origin also drifted) all
     # surface in the commit note. Prior if/elif dropped PARTIAL when BRANCH
@@ -309,7 +338,7 @@ if [ "${#WRITTEN[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
       TAGS+=( "PARTIAL — see .committee-loop-BLOCKED.txt" )
     fi
     [ -f .committee-loop-CONVERGED.txt ] && TAGS+=( "CONVERGED" )
-    COMMIT_NOTE="review: apply committee-loop review to ${WRITTEN[*]}"
+    COMMIT_NOTE="review: apply committee-loop review to ${COMMITTABLE[*]}"
     if [ "${#TAGS[@]}" -gt 0 ]; then
       TAG_JOINED=$(printf ' (%s)' "${TAGS[@]}")
       COMMIT_NOTE="${COMMIT_NOTE}${TAG_JOINED}"
