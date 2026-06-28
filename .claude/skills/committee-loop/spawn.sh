@@ -26,6 +26,40 @@ trap 'cleanup_on_error $?' ERR
 # has failed leaves $? at 0 and we'd exit 0, indistinguishable from success.
 trap 'cleanup_on_error 130' INT TERM HUP QUIT
 
+# ---- Inner-launch command builder (Headroom integration) ----
+# Build the command tmux runs for the detached inner Claude session. When the
+# `headroom` CLI is installed (and not opted out via COMMITTEE_HEADROOM=off, any
+# case), wrap the launch with `headroom wrap claude` so the inner coordinator AND
+# every in-harness Claude agent it spawns (the /committee Claude reviewer + all
+# per-reviewer verifiers) route through Headroom's compression proxy. Headroom
+# reuses an already-running proxy by default (starts one if absent). Otherwise
+# launch bare `claude`, byte-identical to the pre-integration behavior.
+# We deliberately do NOT pass `--no-serena`: that flag REMOVES Serena from the
+# user's *global* ~/.claude.json (verified 2026-06-28 — a persistent, surprising
+# side effect), not just from this launch. Plain `headroom wrap claude` keeps the
+# Headroom MCP registered (default) so `headroom_retrieve` is available for lossless
+# retrieval, and is idempotent for a user who already has Serena (it never removes
+# it). --tool-search keeps its default `true` (deferred tool-loading) — do not pass
+# it. `--` delimits wrap's own options from the claude args that follow.
+# Pure: output depends only on $1 + PATH + COMMITTEE_HEADROOM, no side effects,
+# so the --print-inner-launch self-test hook can exercise it.
+build_inner_launch() {
+  local claude_args="$1" optout=no
+  case "${COMMITTEE_HEADROOM:-auto}" in [Oo][Ff][Ff]) optout=yes ;; esac
+  if [ "$optout" = no ] && command -v headroom >/dev/null 2>&1; then
+    printf '%s' "headroom wrap claude -- $claude_args"
+  else
+    printf '%s' "claude $claude_args"
+  fi
+}
+
+# Side-effect-free self-test hook for scripts/headroom-launch-smoke.sh: print the
+# computed inner-launch command for the given claude-args string, then exit —
+# before any preflight / worktree / tmux work runs.
+if [ "${1:-}" = "--print-inner-launch" ]; then
+  build_inner_launch "${2-}"; printf '\n'; exit 0
+fi
+
 # ---- Preflight: args, targets, tools, skills, git identity ----
 
 [ "$#" -gt 0 ] || {
@@ -370,12 +404,15 @@ printf '\n%s\n' "$RALPH_INVOCATION" >> "$PROMPT_FILE"
 # against total wall-time. `max` rarely pays off for single-file reviews.
 # INNER_LAUNCH_EXTRA defaults to "--effort high" and is overridden by --models
 # innerAgent.{effort,model} (validated charset-safe during arg-parse).
+# build_inner_launch (top of file) routes this through Headroom when available.
+INNER_LAUNCH=$(build_inner_launch "--dangerously-skip-permissions $INNER_LAUNCH_EXTRA")
+case "$INNER_LAUNCH" in "headroom wrap "*) INNER_WRAPPED=1 ;; *) INNER_WRAPPED=0 ;; esac
 tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$WORKTREE_PATH" \
-  "claude --dangerously-skip-permissions $INNER_LAUNCH_EXTRA"
+  "$INNER_LAUNCH"
 
 READY=false
 TRUST_DISMISSED=false
-for _ in $(seq 1 30); do
+for _ in $(seq 1 45); do   # wider: `headroom wrap` adds proxy-handshake latency before the TUI
   PANE=$(tmux capture-pane -t "$SESSION" -p)
   if echo "$PANE" | grep -qF 'bypass permissions on'; then
     READY=true; break
@@ -391,7 +428,10 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 if ! $READY; then
-  echo "error: Claude input box did not render within 30s; aborting" >&2
+  echo "error: Claude input box did not render within 45s; aborting" >&2
+  if [ "${INNER_WRAPPED:-0}" = 1 ]; then
+    echo "hint: the inner session was launched via 'headroom wrap claude'. If Headroom is the cause (proxy unreachable, or 'headroom wrap claude' failing to start), re-run with COMMITTEE_HEADROOM=off to bypass it." >&2
+  fi
   # Dump captured pane so a TUI footer-wording change (or unexpected prompt)
   # is diagnosable without attaching to a killed tmux session.
   echo "--- captured pane contents (for diagnosis) ---" >&2
