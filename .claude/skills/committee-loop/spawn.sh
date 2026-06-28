@@ -34,19 +34,20 @@ trap 'cleanup_on_error 130' INT TERM HUP QUIT
 # per-reviewer verifiers) route through Headroom's compression proxy. Headroom
 # reuses an already-running proxy by default (starts one if absent). Otherwise
 # launch bare `claude`, byte-identical to the pre-integration behavior.
-#   --no-serena : the inner agent never uses Serena — skip registering it (also
-#                 sidesteps an error on hosts without Serena installed). The
-#                 Headroom MCP stays registered (default) so `headroom_retrieve`
-#                 is available; --tool-search keeps its default `true` (deferred
-#                 tool-loading) — do not pass it. `--` delimits wrap's options
-#                 from the claude args that follow.
+# We deliberately do NOT pass `--no-serena`: that flag REMOVES Serena from the
+# user's *global* ~/.claude.json (verified 2026-06-28 — a persistent, surprising
+# side effect), not just from this launch. Plain `headroom wrap claude` keeps the
+# Headroom MCP registered (default) so `headroom_retrieve` is available for lossless
+# retrieval, and is idempotent for a user who already has Serena (it never removes
+# it). --tool-search keeps its default `true` (deferred tool-loading) — do not pass
+# it. `--` delimits wrap's own options from the claude args that follow.
 # Pure: output depends only on $1 + PATH + COMMITTEE_HEADROOM, no side effects,
 # so the --print-inner-launch self-test hook can exercise it.
 build_inner_launch() {
   local claude_args="$1" optout=no
   case "${COMMITTEE_HEADROOM:-auto}" in [Oo][Ff][Ff]) optout=yes ;; esac
   if [ "$optout" = no ] && command -v headroom >/dev/null 2>&1; then
-    printf '%s' "headroom wrap claude --no-serena -- $claude_args"
+    printf '%s' "headroom wrap claude -- $claude_args"
   else
     printf '%s' "claude $claude_args"
   fi

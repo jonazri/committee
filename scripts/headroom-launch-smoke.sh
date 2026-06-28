@@ -24,7 +24,7 @@ BASEPATH="$STUB:/usr/bin:/bin"
 # Case 1: headroom installed -> wrapped
 printf '#!/bin/sh\nexit 0\n' > "$STUB/headroom"; chmod +x "$STUB/headroom"
 got=$(PATH="$BASEPATH" bash "$SPAWN" --print-inner-launch "$ARGS")
-check "$got" "headroom wrap claude --no-serena -- $ARGS" "headroom installed -> wrapped launch"
+check "$got" "headroom wrap claude -- $ARGS" "headroom installed -> wrapped launch"
 
 # Case 2: opt-out via COMMITTEE_HEADROOM=OFF (case-insensitive) -> bare claude
 got=$(PATH="$BASEPATH" COMMITTEE_HEADROOM=OFF bash "$SPAWN" --print-inner-launch "$ARGS")
