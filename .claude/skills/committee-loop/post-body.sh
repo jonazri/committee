@@ -183,9 +183,47 @@ for i in "${!TARGET_FILES[@]}"; do
   WRITTEN+=( "$rel" )
 done
 
+# Partition WRITTEN into targets git can actually commit vs. gitignored-AND-
+# untracked ones. `git add -- <pathspec>` (no -f) EXITS 1 under set -e on an
+# ignored, untracked path — and on a MIXED pathspec it stages NOTHING and still
+# exits 1 (verified git 2.43), so a single gitignored target (e.g. a
+# `committee-loop` over a docs/plans/*.md plan, which is gitignored) would abort
+# post.sh before DONE/teardown AND block committing the tracked targets beside
+# it. The reviewed bytes are already in origin's working tree (mv -f above); the
+# file is deliberately gitignored, so we skip add/commit for it rather than force
+# it into history with -f.
+#
+# Predicate is "ignored AND untracked", not just "ignored": a TRACKED file that
+# also matches an ignore rule is still committable (git add re-adds tracked files
+# without -f — verified), so excluding it would silently drop a real change.
+# Both probes run inside `if` so their nonzero exits don't trip set -e
+# (check-ignore -q: 0=ignored,1=not; ls-files --error-unmatch: 0=tracked,1=not).
+#
+# Computed here, right after the write loop (not just before the commit), so the
+# BLOCKED partial-write note below can tell committed targets apart from
+# gitignored ones that only land in origin's working tree.
+declare -a COMMITTABLE=()
+declare -a SKIPPED_IGNORED=()
+for rel in "${WRITTEN[@]}"; do
+  if git -C "$ORIGIN_PATH" check-ignore -q -- "$rel" 2>/dev/null \
+     && ! git -C "$ORIGIN_PATH" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+    SKIPPED_IGNORED+=( "$rel" )
+  else
+    COMMITTABLE+=( "$rel" )
+  fi
+done
+if [ "${#SKIPPED_IGNORED[@]}" -gt 0 ]; then
+  echo "note: gitignored+untracked target(s) copied to origin's working tree but NOT git-committed: ${SKIPPED_IGNORED[*]}" >&2
+fi
+
 if [ -n "$BLOCK_MSG" ]; then
   printf '%s\n' "$BLOCK_MSG" > .committee-loop-BLOCKED.txt
-  [ "${#WRITTEN[@]}" -gt 0 ] && printf 'partially written (committed separately): %s\n' "${WRITTEN[*]}" >> .committee-loop-BLOCKED.txt
+  # Disposition must be precise: COMMITTABLE targets are committed (below),
+  # but SKIPPED_IGNORED (gitignored+untracked) ones only reach origin's working
+  # tree — claiming they were "committed" would send the user hunting for a
+  # commit that does not exist.
+  [ "${#COMMITTABLE[@]}" -gt 0 ] && printf 'partially written (committed separately): %s\n' "${COMMITTABLE[*]}" >> .committee-loop-BLOCKED.txt
+  [ "${#SKIPPED_IGNORED[@]}" -gt 0 ] && printf 'partially written to origin working tree only (gitignored, not committed): %s\n' "${SKIPPED_IGNORED[*]}" >> .committee-loop-BLOCKED.txt
   # Echo to stderr so the block reason is visible via `tmux capture-pane`
   # without requiring the user to ls into the preserved worktree.
   echo "BLOCKED: $BLOCK_MSG" >&2
@@ -228,34 +266,8 @@ fi
 # bytes (mv -f happened) so the user can still inspect/commit manually.
 SKIP_COMMIT=""
 
-# Partition WRITTEN into targets git can actually commit vs. gitignored-AND-
-# untracked ones. `git add -- <pathspec>` (no -f) EXITS 1 under set -e on an
-# ignored, untracked path — and on a MIXED pathspec it stages NOTHING and still
-# exits 1 (verified git 2.43), so a single gitignored target (e.g. a
-# `committee-loop` over a docs/plans/*.md plan, which is gitignored) would abort
-# post.sh before DONE/teardown AND block committing the tracked targets beside
-# it. The reviewed bytes are already in origin's working tree (mv -f above); the
-# file is deliberately gitignored, so we skip add/commit for it rather than force
-# it into history with -f.
-#
-# Predicate is "ignored AND untracked", not just "ignored": a TRACKED file that
-# also matches an ignore rule is still committable (git add re-adds tracked files
-# without -f — verified), so excluding it would silently drop a real change.
-# Both probes run inside `if` so their nonzero exits don't trip set -e
-# (check-ignore -q: 0=ignored,1=not; ls-files --error-unmatch: 0=tracked,1=not).
-declare -a COMMITTABLE=()
-declare -a SKIPPED_IGNORED=()
-for rel in "${WRITTEN[@]}"; do
-  if git -C "$ORIGIN_PATH" check-ignore -q -- "$rel" 2>/dev/null \
-     && ! git -C "$ORIGIN_PATH" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
-    SKIPPED_IGNORED+=( "$rel" )
-  else
-    COMMITTABLE+=( "$rel" )
-  fi
-done
-if [ "${#SKIPPED_IGNORED[@]}" -gt 0 ]; then
-  echo "note: gitignored+untracked target(s) copied to origin's working tree but NOT git-committed: ${SKIPPED_IGNORED[*]}" >&2
-fi
+# (COMMITTABLE / SKIPPED_IGNORED were partitioned right after the write loop
+# above, so the BLOCKED partial-write note could use them.)
 
 # Helper: is $1 a path we actually git-add (i.e. in COMMITTABLE)?
 # Keyed on COMMITTABLE, not WRITTEN, so the staged-index guards below classify
@@ -375,6 +387,11 @@ fi
 [ -f .committee-loop-decisions.md ] && cp .committee-loop-decisions.md "$ART_DIR/decisions.md"
 [ -f .committee-loop-DEFERRED.md ]  && cp .committee-loop-DEFERRED.md  "$ART_DIR/deferred.md"
 [ -f .committee-loop-CONVERGED.txt ] && cp .committee-loop-CONVERGED.txt "$ART_DIR/CONVERGED.txt"
+# DONE records origin HEAD as the completion marker — NOT a guarantee that this
+# run added a commit. When every target was gitignored+untracked (COMMITTABLE
+# empty), the reviewed bytes live only in origin's working tree and HEAD is
+# unchanged; DONE still fires (the run completed cleanly). The watcher keys on
+# DONE's existence, not on HEAD having moved, so this is the intended signal.
 git -C "$ORIGIN_PATH" rev-parse HEAD > "$ART_DIR/DONE.tmp"
 mv -f -- "$ART_DIR/DONE.tmp" "$ART_DIR/DONE"
 
