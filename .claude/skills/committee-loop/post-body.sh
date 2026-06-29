@@ -75,7 +75,9 @@ fi
 #
 # Partial-write safety (multi-target): track which targets were successfully
 # written. On block, `break` instead of `exit 0`, then commit whatever made it
-# with a (PARTIAL) note so origin is never left with uncommitted changes.
+# with a (PARTIAL) note so origin's tracked targets are never left with
+# uncommitted changes (gitignored targets stay in the working tree by design —
+# see the COMMITTABLE/SKIPPED_IGNORED partition below).
 declare -a WRITTEN=()
 BLOCK_MSG=""
 for i in "${!TARGET_FILES[@]}"; do
@@ -204,14 +206,22 @@ done
 # gitignored ones that only land in origin's working tree.
 declare -a COMMITTABLE=()
 declare -a SKIPPED_IGNORED=()
-for rel in "${WRITTEN[@]}"; do
-  if git -C "$ORIGIN_PATH" check-ignore -q -- "$rel" 2>/dev/null \
-     && ! git -C "$ORIGIN_PATH" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
-    SKIPPED_IGNORED+=( "$rel" )
-  else
-    COMMITTABLE+=( "$rel" )
-  fi
-done
+# Guard the expansion: WRITTEN is empty on every block-before-first-write path
+# (the write loop `break`s on the first target's failure), and "${WRITTEN[@]}"
+# over an empty array aborts under `set -u` on bash < 4.4 — notably macOS stock
+# bash 3.2.57, which this script targets (see the `local -n` note below). That
+# would kill post.sh before it writes BLOCKED.txt — the exact opaque failure the
+# partial-write safety above exists to prevent.
+if [ "${#WRITTEN[@]}" -gt 0 ]; then
+  for rel in "${WRITTEN[@]}"; do
+    if git -C "$ORIGIN_PATH" check-ignore -q -- "$rel" 2>/dev/null \
+       && ! git -C "$ORIGIN_PATH" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+      SKIPPED_IGNORED+=( "$rel" )
+    else
+      COMMITTABLE+=( "$rel" )
+    fi
+  done
+fi
 if [ "${#SKIPPED_IGNORED[@]}" -gt 0 ]; then
   echo "note: gitignored+untracked target(s) copied to origin's working tree but NOT git-committed: ${SKIPPED_IGNORED[*]}" >&2
 fi
