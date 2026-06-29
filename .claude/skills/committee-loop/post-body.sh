@@ -75,7 +75,9 @@ fi
 #
 # Partial-write safety (multi-target): track which targets were successfully
 # written. On block, `break` instead of `exit 0`, then commit whatever made it
-# with a (PARTIAL) note so origin is never left with uncommitted changes.
+# with a (PARTIAL) note so origin's tracked targets are never left with
+# uncommitted changes (gitignored targets stay in the working tree by design —
+# see the COMMITTABLE/SKIPPED_IGNORED partition below).
 declare -a WRITTEN=()
 BLOCK_MSG=""
 for i in "${!TARGET_FILES[@]}"; do
@@ -183,9 +185,55 @@ for i in "${!TARGET_FILES[@]}"; do
   WRITTEN+=( "$rel" )
 done
 
+# Partition WRITTEN into targets git can actually commit vs. gitignored-AND-
+# untracked ones. `git add -- <pathspec>` (no -f) EXITS 1 under set -e on an
+# ignored, untracked path — and on a MIXED pathspec it stages NOTHING and still
+# exits 1 (verified git 2.43), so a single gitignored target (e.g. a
+# `committee-loop` over a docs/plans/*.md plan, which is gitignored) would abort
+# post.sh before DONE/teardown AND block committing the tracked targets beside
+# it. The reviewed bytes are already in origin's working tree (mv -f above); the
+# file is deliberately gitignored, so we skip add/commit for it rather than force
+# it into history with -f.
+#
+# Predicate is "ignored AND untracked", not just "ignored": a TRACKED file that
+# also matches an ignore rule is still committable (git add re-adds tracked files
+# without -f — verified), so excluding it would silently drop a real change.
+# Both probes run inside `if` so their nonzero exits don't trip set -e
+# (check-ignore -q: 0=ignored,1=not; ls-files --error-unmatch: 0=tracked,1=not).
+#
+# Computed here, right after the write loop (not just before the commit), so the
+# BLOCKED partial-write note below can tell committed targets apart from
+# gitignored ones that only land in origin's working tree.
+declare -a COMMITTABLE=()
+declare -a SKIPPED_IGNORED=()
+# Guard the expansion: WRITTEN is empty on every block-before-first-write path
+# (the write loop `break`s on the first target's failure), and "${WRITTEN[@]}"
+# over an empty array aborts under `set -u` on bash < 4.4 — notably macOS stock
+# bash 3.2.57, which this script targets (see the `local -n` note below). That
+# would kill post.sh before it writes BLOCKED.txt — the exact opaque failure the
+# partial-write safety above exists to prevent.
+if [ "${#WRITTEN[@]}" -gt 0 ]; then
+  for rel in "${WRITTEN[@]}"; do
+    if git -C "$ORIGIN_PATH" check-ignore -q -- "$rel" 2>/dev/null \
+       && ! git -C "$ORIGIN_PATH" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+      SKIPPED_IGNORED+=( "$rel" )
+    else
+      COMMITTABLE+=( "$rel" )
+    fi
+  done
+fi
+if [ "${#SKIPPED_IGNORED[@]}" -gt 0 ]; then
+  echo "note: gitignored+untracked target(s) copied to origin's working tree but NOT git-committed: ${SKIPPED_IGNORED[*]}" >&2
+fi
+
 if [ -n "$BLOCK_MSG" ]; then
   printf '%s\n' "$BLOCK_MSG" > .committee-loop-BLOCKED.txt
-  [ "${#WRITTEN[@]}" -gt 0 ] && printf 'partially written (committed separately): %s\n' "${WRITTEN[*]}" >> .committee-loop-BLOCKED.txt
+  # Disposition must be precise: COMMITTABLE targets are committed (below),
+  # but SKIPPED_IGNORED (gitignored+untracked) ones only reach origin's working
+  # tree — claiming they were "committed" would send the user hunting for a
+  # commit that does not exist.
+  [ "${#COMMITTABLE[@]}" -gt 0 ] && printf 'partially written (committed separately): %s\n' "${COMMITTABLE[*]}" >> .committee-loop-BLOCKED.txt
+  [ "${#SKIPPED_IGNORED[@]}" -gt 0 ] && printf 'partially written to origin working tree only (gitignored, not committed): %s\n' "${SKIPPED_IGNORED[*]}" >> .committee-loop-BLOCKED.txt
   # Echo to stderr so the block reason is visible via `tmux capture-pane`
   # without requiring the user to ls into the preserved worktree.
   echo "BLOCKED: $BLOCK_MSG" >&2
@@ -199,9 +247,10 @@ fi
 # dirty. Instead: commit anyway (if anything was written) with a loud
 # `(BRANCH MOVED)` note so the commit is visible and revertable.
 #
-# Hoisted outside the ${#WRITTEN[@]} -gt 0 guard: an all-target-blocks-before-
-# any-write run must still record branch drift in BLOCKED.txt — otherwise the
-# user inspecting a preserved worktree has no indication origin moved.
+# Hoisted above the commit logic (gated on ${#COMMITTABLE[@]} -gt 0): an
+# all-target-blocks-before-any-write run must still record branch drift in
+# BLOCKED.txt — otherwise the user inspecting a preserved worktree has no
+# indication origin moved.
 REFRESH_ORIGIN_REF=$(git -C "$ORIGIN_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
 BRANCH_MOVED=""
 if [ "$REFRESH_ORIGIN_REF" != "$ORIGIN_REF" ]; then
@@ -227,12 +276,20 @@ fi
 # reason in BLOCKED.txt — origin's working tree already holds our reviewed
 # bytes (mv -f happened) so the user can still inspect/commit manually.
 SKIP_COMMIT=""
-# Helper: is $1 in the WRITTEN array?
-is_in_written() {
+
+# (COMMITTABLE / SKIPPED_IGNORED were partitioned right after the write loop
+# above, so the BLOCKED partial-write note could use them.)
+
+# Helper: is $1 a path we actually git-add (i.e. in COMMITTABLE)?
+# Keyed on COMMITTABLE, not WRITTEN, so the staged-index guards below classify
+# precisely what this script stages: a SKIPPED_IGNORED (ignored+untracked) path
+# is never added, so if one ever shows up staged it is an unrelated/concurrent
+# write and must be flagged — not waved through into the pathspec-free commit.
+is_committable() {
   local needle="$1"
-  local w
-  for w in "${WRITTEN[@]}"; do
-    [ "$w" = "$needle" ] && return 0
+  local c
+  for c in "${COMMITTABLE[@]}"; do
+    [ "$c" = "$needle" ] && return 0
   done
   return 1
 }
@@ -244,7 +301,7 @@ is_in_written() {
 # Inlined at both call sites instead of a helper using `local -n`, which
 # requires bash 4.3+ and breaks on macOS stock bash 3.2.57. Portable across
 # bash 3.2+.
-if [ "${#WRITTEN[@]}" -gt 0 ]; then
+if [ "${#COMMITTABLE[@]}" -gt 0 ]; then
   declare -a PRE_STAGED_ARR=()
   while IFS= read -r -d '' staged_path; do
     [ -n "$staged_path" ] && PRE_STAGED_ARR+=( "$staged_path" )
@@ -252,7 +309,7 @@ if [ "${#WRITTEN[@]}" -gt 0 ]; then
   if [ "${#PRE_STAGED_ARR[@]}" -gt 0 ]; then
     declare -a UNRELATED=()
     for staged_path in "${PRE_STAGED_ARR[@]}"; do
-      is_in_written "$staged_path" || UNRELATED+=( "$staged_path" )
+      is_committable "$staged_path" || UNRELATED+=( "$staged_path" )
     done
     if [ "${#UNRELATED[@]}" -gt 0 ]; then
       UNRELATED_JOINED=$(printf '%s, ' "${UNRELATED[@]}"); UNRELATED_JOINED="${UNRELATED_JOINED%, }"
@@ -265,20 +322,20 @@ if [ "${#WRITTEN[@]}" -gt 0 ]; then
   fi
 fi
 
-if [ "${#WRITTEN[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
-  git -C "$ORIGIN_PATH" add -- "${WRITTEN[@]}"
+if [ "${#COMMITTABLE[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
+  git -C "$ORIGIN_PATH" add -- "${COMMITTABLE[@]}"
   # Re-snapshot staged paths immediately after our git add. A concurrent
   # `git add` of an unrelated file in the window between PRE_STAGED_ARR and
   # this point would be swept into the pathspec-free `git commit` below.
-  # Expected set after our add = WRITTEN + whatever was pre-staged (which we
-  # already verified was a subset of WRITTEN, or we hit SKIP_COMMIT above).
+  # Expected set after our add = COMMITTABLE + whatever was pre-staged (which we
+  # already verified was a subset of COMMITTABLE, or we hit SKIP_COMMIT above).
   declare -a POST_STAGED_ARR=()
   while IFS= read -r -d '' staged_path; do
     [ -n "$staged_path" ] && POST_STAGED_ARR+=( "$staged_path" )
   done < <(git -C "$ORIGIN_PATH" diff --cached --name-only -z 2>/dev/null || true)
   declare -a UNEXPECTED=()
   for staged_path in "${POST_STAGED_ARR[@]}"; do
-    is_in_written "$staged_path" || UNEXPECTED+=( "$staged_path" )
+    is_committable "$staged_path" || UNEXPECTED+=( "$staged_path" )
   done
   if [ "${#UNEXPECTED[@]}" -gt 0 ]; then
     UNEXPECTED_JOINED=$(printf '%s, ' "${UNEXPECTED[@]}"); UNEXPECTED_JOINED="${UNEXPECTED_JOINED%, }"
@@ -287,15 +344,15 @@ if [ "${#WRITTEN[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
     printf '%s\n' "$EXTRA" >> .committee-loop-BLOCKED.txt
     echo "BLOCKED: $EXTRA" >&2
     # Unstage the paths we added so the user's original staged state is
-    # preserved as much as possible — `git reset HEAD -- WRITTEN` restores
+    # preserved as much as possible — `git reset HEAD -- COMMITTABLE` restores
     # HEAD state for those paths in the index.
-    git -C "$ORIGIN_PATH" reset --quiet HEAD -- "${WRITTEN[@]}" 2>/dev/null || true
+    git -C "$ORIGIN_PATH" reset --quiet HEAD -- "${COMMITTABLE[@]}" 2>/dev/null || true
     SKIP_COMMIT=1
   fi
 fi
 
-if [ "${#WRITTEN[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
-  if ! git -C "$ORIGIN_PATH" diff --cached --quiet -- "${WRITTEN[@]}"; then
+if [ "${#COMMITTABLE[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
+  if ! git -C "$ORIGIN_PATH" diff --cached --quiet -- "${COMMITTABLE[@]}"; then
     # Build a tag list instead of if/elif so multiple conditions (e.g. PARTIAL +
     # BRANCH MOVED for a partial-write run where origin also drifted) all
     # surface in the commit note. Prior if/elif dropped PARTIAL when BRANCH
@@ -309,7 +366,7 @@ if [ "${#WRITTEN[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
       TAGS+=( "PARTIAL — see .committee-loop-BLOCKED.txt" )
     fi
     [ -f .committee-loop-CONVERGED.txt ] && TAGS+=( "CONVERGED" )
-    COMMIT_NOTE="review: apply committee-loop review to ${WRITTEN[*]}"
+    COMMIT_NOTE="review: apply committee-loop review to ${COMMITTABLE[*]}"
     if [ "${#TAGS[@]}" -gt 0 ]; then
       TAG_JOINED=$(printf ' (%s)' "${TAGS[@]}")
       COMMIT_NOTE="${COMMIT_NOTE}${TAG_JOINED}"
@@ -341,6 +398,11 @@ fi
 [ -f .committee-loop-decisions.md ] && cp .committee-loop-decisions.md "$ART_DIR/decisions.md"
 [ -f .committee-loop-DEFERRED.md ]  && cp .committee-loop-DEFERRED.md  "$ART_DIR/deferred.md"
 [ -f .committee-loop-CONVERGED.txt ] && cp .committee-loop-CONVERGED.txt "$ART_DIR/CONVERGED.txt"
+# DONE records origin HEAD as the completion marker — NOT a guarantee that this
+# run added a commit. When every target was gitignored+untracked (COMMITTABLE
+# empty), the reviewed bytes live only in origin's working tree and HEAD is
+# unchanged; DONE still fires (the run completed cleanly). The watcher keys on
+# DONE's existence, not on HEAD having moved, so this is the intended signal.
 git -C "$ORIGIN_PATH" rev-parse HEAD > "$ART_DIR/DONE.tmp"
 mv -f -- "$ART_DIR/DONE.tmp" "$ART_DIR/DONE"
 
