@@ -227,15 +227,6 @@ fi
 # reason in BLOCKED.txt — origin's working tree already holds our reviewed
 # bytes (mv -f happened) so the user can still inspect/commit manually.
 SKIP_COMMIT=""
-# Helper: is $1 in the WRITTEN array?
-is_in_written() {
-  local needle="$1"
-  local w
-  for w in "${WRITTEN[@]}"; do
-    [ "$w" = "$needle" ] && return 0
-  done
-  return 1
-}
 
 # Partition WRITTEN into targets git can actually commit vs. gitignored-AND-
 # untracked ones. `git add -- <pathspec>` (no -f) EXITS 1 under set -e on an
@@ -255,7 +246,7 @@ is_in_written() {
 declare -a COMMITTABLE=()
 declare -a SKIPPED_IGNORED=()
 for rel in "${WRITTEN[@]}"; do
-  if git -C "$ORIGIN_PATH" check-ignore -q -- "$rel" \
+  if git -C "$ORIGIN_PATH" check-ignore -q -- "$rel" 2>/dev/null \
      && ! git -C "$ORIGIN_PATH" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
     SKIPPED_IGNORED+=( "$rel" )
   else
@@ -265,6 +256,20 @@ done
 if [ "${#SKIPPED_IGNORED[@]}" -gt 0 ]; then
   echo "note: gitignored+untracked target(s) copied to origin's working tree but NOT git-committed: ${SKIPPED_IGNORED[*]}" >&2
 fi
+
+# Helper: is $1 a path we actually git-add (i.e. in COMMITTABLE)?
+# Keyed on COMMITTABLE, not WRITTEN, so the staged-index guards below classify
+# precisely what this script stages: a SKIPPED_IGNORED (ignored+untracked) path
+# is never added, so if one ever shows up staged it is an unrelated/concurrent
+# write and must be flagged — not waved through into the pathspec-free commit.
+is_committable() {
+  local needle="$1"
+  local c
+  for c in "${COMMITTABLE[@]}"; do
+    [ "$c" = "$needle" ] && return 0
+  done
+  return 1
+}
 
 # Staged paths via NUL-delimited output — handles filenames with newlines /
 # tabs / non-ASCII (git default quotes such paths with C-escapes otherwise,
@@ -281,7 +286,7 @@ if [ "${#COMMITTABLE[@]}" -gt 0 ]; then
   if [ "${#PRE_STAGED_ARR[@]}" -gt 0 ]; then
     declare -a UNRELATED=()
     for staged_path in "${PRE_STAGED_ARR[@]}"; do
-      is_in_written "$staged_path" || UNRELATED+=( "$staged_path" )
+      is_committable "$staged_path" || UNRELATED+=( "$staged_path" )
     done
     if [ "${#UNRELATED[@]}" -gt 0 ]; then
       UNRELATED_JOINED=$(printf '%s, ' "${UNRELATED[@]}"); UNRELATED_JOINED="${UNRELATED_JOINED%, }"
@@ -299,15 +304,15 @@ if [ "${#COMMITTABLE[@]}" -gt 0 ] && [ -z "$SKIP_COMMIT" ]; then
   # Re-snapshot staged paths immediately after our git add. A concurrent
   # `git add` of an unrelated file in the window between PRE_STAGED_ARR and
   # this point would be swept into the pathspec-free `git commit` below.
-  # Expected set after our add = WRITTEN + whatever was pre-staged (which we
-  # already verified was a subset of WRITTEN, or we hit SKIP_COMMIT above).
+  # Expected set after our add = COMMITTABLE + whatever was pre-staged (which we
+  # already verified was a subset of COMMITTABLE, or we hit SKIP_COMMIT above).
   declare -a POST_STAGED_ARR=()
   while IFS= read -r -d '' staged_path; do
     [ -n "$staged_path" ] && POST_STAGED_ARR+=( "$staged_path" )
   done < <(git -C "$ORIGIN_PATH" diff --cached --name-only -z 2>/dev/null || true)
   declare -a UNEXPECTED=()
   for staged_path in "${POST_STAGED_ARR[@]}"; do
-    is_in_written "$staged_path" || UNEXPECTED+=( "$staged_path" )
+    is_committable "$staged_path" || UNEXPECTED+=( "$staged_path" )
   done
   if [ "${#UNEXPECTED[@]}" -gt 0 ]; then
     UNEXPECTED_JOINED=$(printf '%s, ' "${UNEXPECTED[@]}"); UNEXPECTED_JOINED="${UNEXPECTED_JOINED%, }"
