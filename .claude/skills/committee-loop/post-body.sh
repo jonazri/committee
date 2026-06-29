@@ -237,9 +237,10 @@ fi
 # dirty. Instead: commit anyway (if anything was written) with a loud
 # `(BRANCH MOVED)` note so the commit is visible and revertable.
 #
-# Hoisted outside the ${#WRITTEN[@]} -gt 0 guard: an all-target-blocks-before-
-# any-write run must still record branch drift in BLOCKED.txt — otherwise the
-# user inspecting a preserved worktree has no indication origin moved.
+# Hoisted above the commit logic (gated on ${#COMMITTABLE[@]} -gt 0): an
+# all-target-blocks-before-any-write run must still record branch drift in
+# BLOCKED.txt — otherwise the user inspecting a preserved worktree has no
+# indication origin moved.
 REFRESH_ORIGIN_REF=$(git -C "$ORIGIN_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
 BRANCH_MOVED=""
 if [ "$REFRESH_ORIGIN_REF" != "$ORIGIN_REF" ]; then
