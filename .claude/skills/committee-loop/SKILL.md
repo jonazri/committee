@@ -24,6 +24,7 @@ Do NOT use when: the target needs human judgment on each finding (use `/committe
 - About to edit any bash inline in SKILL.md or reproduce spawn logic by hand → call `spawn.sh`
 - About to synchronously block on the tmux session, watcher, or health check → all run in background; the harness delivers each exit as a notification
 - About to tell the user "fire-and-forget", or to exit without (a) launching the watcher + health-check shells AND (b) starting the recurring ~4.5m keep-alive loop (§2b) → this skill ACTIVELY monitors; a stall must be caught within ~4.5 min, not hours
+- About to tell the user the loop "failed"/is rate-limited and propose terminating early (with ANY justification for why stopping now is "good enough") because the pane shows the `/rate-limit-options` dialog → that dialog is NOT a real wall (your being able to SEE it proves neither you nor the session is limited); do NOT tear the loop down — resolve it per §2c (select **"Stop and wait for limit to reset"**, never the paid option, then nudge `continue`), never accept it at face value
 - The argument contains no concrete file path → ask the user which file to review before spawning
 </red_flags>
 
@@ -156,6 +157,33 @@ The 4.5m health check and the terminal watcher are NOT sufficient on their own. 
   Wait ~10s, re-peek, and confirm a spinner appeared.
 - **Exception — the final `Run post.sh?` prompt is a SELECTION MENU, not a text prompt.** There a single `Enter` (selects the highlighted "Yes, run post.sh") is correct — do NOT clear/retype, and do NOT auto-advance it if the user asked to decide on teardown.
 
+### 2c. Rate limits, 429s, and transient API errors — resolve, never wait them out
+
+Session limits, 429s, and "throttling" are effectively **fake news** for a committee loop, and the coordinator's OWN failure mode is the trap: seeing the loop paused on the rate-limit dialog, declaring the loop "failed," and proposing to terminate early with a made-up justification for why stopping now is "good enough." **Never do that.** **If you can SEE the `/rate-limit-options` dialog on the committee-loop pane, then you are NOT rate-limited and neither is the detached session** (a genuinely limited session could not render that dialog for you to read). It is dismissed and nudged onward — never accepted, never waited out, never a reason to tear the loop down.
+
+**The dialog is Claude Code's `/rate-limit-options` SELECTION MENU.** It offers a paid/billing option (the label varies by plan — *"Switch to usage credits"*, *"Add funds"*, or *"Upgrade to Team plan"*) and, verbatim, **"Stop and wait for limit to reset"**. **Select "Stop and wait for limit to reset" — NEVER the paid option** (the paid option bills the org; the operator's standing preference is to wait). Selecting it does NOT actually idle for hours — it just dismisses the modal, and the nudge below resumes the loop immediately. (The option's *label* says "wait," but that is Anthropic's wording for the non-billing choice; selecting it and then nudging IS the resume path, not an instruction to sit idle. "Never wait it out" above means never accept the dialog as a terminal wall — not never touch that button. The "you're not rate-limited" framing is the observed behavior: the loop resumes on a `continue` nudge every time, so treat the reset countdown as dismissable, not authoritative.)
+
+**Peek the pane first and select the wait row explicitly — do NOT blind-`Enter`**, because the paid option may be the highlighted default. Then nudge `continue`:
+
+```bash
+# PEEK the menu first — the paid option may be the highlighted default:
+tmux -L committee-loop capture-pane -t <SESSION> -p | tail -45
+# The menu is arrow-navigable. If "Stop and wait for limit to reset" is NOT the
+# highlighted row, move the highlight onto it (arrow keys, or type its number if
+# the menu is numbered) BEFORE selecting.
+tmux -L committee-loop send-keys -t <SESSION> Enter        # selects the HIGHLIGHTED row — it MUST read "Stop and wait for limit to reset"
+# Then nudge the now-idle prompt (clear the line first — a bare Enter won't submit):
+sleep 1; tmux -L committee-loop send-keys -t <SESSION> C-u
+sleep 1; tmux -L committee-loop send-keys -t <SESSION> -l "continue"
+sleep 1; tmux -L committee-loop send-keys -t <SESSION> Enter
+```
+
+Wait ~10s, re-peek, and confirm a spinner appeared. (`resume` works as the nudge word too — the word doesn't matter.)
+
+- **Intermittent API error with NO dialog** (a bare error line at an otherwise idle prompt) — no menu to select; just send the nudge (the `C-u` → `continue` → Enter steps above).
+- **If the first nudge doesn't take** (re-peek shows no spinner), retry with **exponential backoff** — ~15s, ~30s, ~60s, ~120s … — re-sending the nudge each time until a spinner appears (space these waits with a background shell or `ScheduleWakeup` as in §2b — never a foreground `sleep`). Do NOT give up, and do NOT report the loop as rate-limited / blocked / failed.
+- **Same rule for any nested subagent, `/committee` workflow, or other session** whose pane shows the `/rate-limit-options` menu or a transient API error: never accept it at face value — always select "Stop and wait for limit to reset" (never the paid option) and nudge (with backoff). Choosing "Stop and wait for limit to reset" IS the resolution; it is never a reason to actually stop.
+
 Treat committee-loop on a large target as **attended**, not fire-and-forget: expect to nudge at most iteration boundaries.
 
 ### 3. Report to user
@@ -171,7 +199,7 @@ Committee loop spawned.
 - Watcher:       background shell <WATCHER_SHELL_ID> (fires on terminal state, polls every 15s)
 - Health check:  background shell <HEALTH_SHELL_ID> (fires once at T+4.5m with a progress snapshot)
 
-I'll check in roughly every 4.5 minutes (recovering the loop if its auto-continue stalls — see §2b) and report again whenever the loop finishes (within ~15s of terminal state).
+I'll check in roughly every 4.5 minutes (recovering the loop if its auto-continue stalls, or nudging it past any rate-limit/429 dialog — see §2b/§2c) and report again whenever the loop finishes (within ~15s of terminal state).
 
 (committee-loop runs on a private tmux socket for isolation — note the `-L committee-loop`.)
 Monitor:  tmux -L committee-loop attach -t <SESSION>      (Ctrl-b d to detach)
