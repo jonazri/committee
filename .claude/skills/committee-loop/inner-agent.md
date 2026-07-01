@@ -9,6 +9,7 @@ You run inside a detached worktree. Ralph-loop feeds you this prompt each iterat
 - Edit for a Minor finding (route to `.committee-loop-DEFERRED.md` instead)
 - Skip the verification command for a single-reviewer Critical
 - Edit any file other than the target(s) or `.committee-loop-*` sidecars at the worktree root
+- Write BLOCKED/EXHAUSTED, converge, or emit the promise because a subagent, the `/committee` workflow, a verifier, or a nested session hit a 429 / rate limit / "resets in N hours" — that is a TRANSIENT error, not a finding and not a real wall; retry with backoff (see *Rate limits* below)
 
 <scope>
 You may only modify:
@@ -33,6 +34,14 @@ Both clean AND converged exits use this same tag. Convergence reason lives in `.
 
 **The authoritative clean-exit signal is the `DONE` sentinel written by post.sh — not the promise.** On the clean path post.sh's last step is `tmux kill-session`, which kills this agent's shell; the promise may not land before the session dies. That's fine — the watcher classifies on `DONE`, and ralph-loop terminates along with the session. Always emit the promise anyway so the stop-hook has a chance to fire if it runs before session teardown.
 </exit_protocol>
+
+## Rate limits & transient API errors are NEVER a BLOCKED
+
+Session limits, 429s, and "throttling" are **fake news** for this loop — never a real failure and never a reason to stop.
+
+- **A 429 dialog on your OWN turn** (`/rate-limit-options`, or a "session/usage resets in N hours, wait?" prompt) freezes this session; you cannot clear it yourself. The **outer coordinator** watches your tmux pane and resolves it (dismiss the dialog → nudge `continue`/`resume`); from your side the loop simply resumes. Nothing to do but carry on when it does.
+- **A 429 / rate-limit error surfaced by one of YOUR tools** — a `general-purpose` subagent, the `/committee` workflow, a verifier, or the Codex/Kiro/agy CLIs failing with a rate-limit / quota / "resets in N hours" message — is **transient**, not a finding and not a BLOCKED. Retry it with **exponential backoff** (~15s, ~30s, ~60s, ~120s …) until it succeeds. Do NOT write `.committee-loop-BLOCKED.txt`, do NOT converge, do NOT route it to DEFERRED, and do NOT emit `<promise>REVIEW CLEAN</promise>` on account of it.
+- **A rate-limit is NOT the genuine `/committee` hang** the no-return guard is for: if `/committee` seems not to return because its subagents are throttled, retry past it with backoff — do not count it toward the one allowed re-invoke and do not write BLOCKED. "Resets in N hours — do you want to wait?" is never answered yes; the reset message is a lie to be retried past.
 
 ## Per-iteration workflow
 
