@@ -147,7 +147,7 @@ The 4.5m health check and the terminal watcher are NOT sufficient on their own. 
 - **Cadence:** poll the pane roughly every ~4.5 min (270s — keeps the prompt cache warm) until the watcher fires a terminal outcome. Use the harness's own scheduling (e.g. `ScheduleWakeup`) rather than blocking `sleep`s.
 - **Peek:** `tmux -L committee-loop capture-pane -t <SESSION> -p | tail -45`.
 - **STALLED** = an idle prompt — `❯ continue`, or an empty `❯ ` with a `← for agents` / `new task? /clear` hint — and **no active spinner**. Corroborate with no recent worktree file activity: `find <WORKTREE_PATH> -type f -not -path '*/.git/*' -newermt '-6 minutes'` returns nothing.
-- **RUNNING** = an active spinner line (`…· esc to interrupt`). Iterations legitimately take ~20–25 min (reviewers + verifiers), so a static tail *with* a spinner is normal — judge by spinner + fs activity, not "looks stuck."
+- **RUNNING** = an active spinner line (`…· esc to interrupt`). Iterations legitimately take ~20–35 min (reviewers + verifiers), so a static tail *with* a spinner is normal — judge by spinner + fs activity, not "looks stuck."
 - **Recover** (a bare `Enter`/`C-m` does NOT submit — the line must be cleared and retyped):
   ```bash
   tmux -L committee-loop send-keys -t <SESSION> C-u

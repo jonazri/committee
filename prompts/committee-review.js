@@ -240,11 +240,11 @@ IMPORTANT: \`codex review\` writes its ENTIRE output — including the final rev
 // so Kiro reads the precomputed diff (prepare.sh writes diff.txt for EVERY scope) instead of running git;
 // it can still read other repo files for context. Auto vs read-only no longer differ for Kiro.
 const kiroPrompt = `Run the Kiro CLI to review. Read ${a.promptsDir}/reviewers/kiro.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
-Run with a 1200000 ms Bash timeout:
+Run as ONE Bash invocation with run_in_background: true and wait for its task-completion notification — the foreground Bash budget caps at 600000 ms, below this reviewer's 1200 s bound, so the shell's own \`timeout 1200\` must be the operative cap:
   cd ${shq(projectRoot)} && timeout 1200 kiro-cli chat --no-interactive --trust-tools=fs_read "Read '${dq(a.diffPath)}' (the diff; see '${dq(a.diffStatPath)}' for a file-level summary) and review it. ${dq(cliFraming)}" > ${shq(a.sessionDir)}/kiro.md 2> ${shq(a.sessionDir)}/kiro.err
 ${specNote}
 ${staticNote}
-Parse the output into findings. If it errors or returns nothing, set ran_ok=false with the reason.`
+Parse the output into findings. If it errors or returns nothing, set ran_ok=false with the reason (a \`timeout\` kill — exit 124 — is an error: do NOT parse a partial kiro.md).`
 
 // ── Gemini reviewers via the Antigravity CLI (agy) ──────────────────────────
 // gemini-cli is deprecated for Code Assist individuals (IneligibleTierError → migrate to
