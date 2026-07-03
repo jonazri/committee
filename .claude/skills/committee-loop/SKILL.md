@@ -147,7 +147,7 @@ The 4.5m health check and the terminal watcher are NOT sufficient on their own. 
 - **Cadence:** poll roughly every ~4.5 min (270s — keeps the prompt cache warm; do NOT stretch past ~290s — 270s stays under the 300s prompt-cache TTL, and anything longer buys a cold cache on every wakeup) until the watcher fires a terminal outcome. Use the harness's own scheduling (e.g. `ScheduleWakeup`) rather than blocking `sleep`s.
 - **Tick — ONE Bash call** (pane peek + mtime probe + sentinel check together; never split these into separate calls):
   ```bash
-  SESSION=<SESSION>; WORKTREE_PATH=<WORKTREE_PATH>; ORIGIN_GIT_DIR=<ORIGIN_GIT_DIR>  # from the manifest
+  SESSION="<SESSION>"; WORKTREE_PATH="<WORKTREE_PATH>"; ORIGIN_GIT_DIR="<ORIGIN_GIT_DIR>"  # from the manifest
   ART_DIR="$ORIGIN_GIT_DIR/committee-loop/$SESSION"
   tmux -L committee-loop capture-pane -t "$SESSION" -p | tail -45
   echo '--- recent worktree writes (empty list + idle prompt = STALLED) ---'
@@ -253,7 +253,7 @@ On **no** (or a partial selection), do only what the user approved — or nothin
 
 ## Notes
 
-- macOS: install `coreutils` (`brew install coreutils`) AND put the gnubin symlinks on PATH so `realpath`, `sha256sum`, `readlink -f`, and `timeout` resolve to the GNU variants (not BSD `readlink` which lacks `-f`, and not a missing `timeout`). Example: `export PATH="$(brew --prefix)/opt/coreutils/libexec/gnubin:$PATH"` in your shell profile. `spawn.sh` preflight probes `timeout` and behavior-probes `realpath -e` so a missing GNU variant fails fast.
+- macOS: install `coreutils` (`brew install coreutils`) AND put the gnubin symlinks on PATH so `realpath`, `sha256sum`, `readlink -f`, `date -d`, and `timeout` resolve to the GNU variants (not BSD `readlink` which lacks `-f`, not BSD `date` which lacks `-d`, and not a missing `timeout`). Example: `export PATH="$(brew --prefix)/opt/coreutils/libexec/gnubin:$PATH"` in your shell profile. `spawn.sh` preflight probes `timeout` and behavior-probes `realpath -e` so a missing GNU variant fails fast.
 - `--dangerously-skip-permissions` does NOT bypass Claude Code's protected-paths guard for writes under `.claude/` (claude-code#35718). `spawn.sh` launches a watchdog that auto-answers that prompt. Targets outside `.claude/` never trigger it. Scope is enforced by the inner-agent instructions, not by sandboxing.
 - `--effort high` is the sweet spot for loop-agent discipline vs wall-time; `max` rarely pays off for single-file reviews.
 - Each ralph iteration is capped at 10; if the loop doesn't converge within that, the watcher reports `EXHAUSTED` and the worktree is preserved for inspection.
