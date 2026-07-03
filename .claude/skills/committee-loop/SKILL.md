@@ -117,7 +117,7 @@ Bash({
 
 Each call returns a shell ID — save both and include in the user report so the user can kill them if they cancel manually. Do NOT synchronously block on either shell; the harness delivers each exit as a notification.
 
-**Then start the recurring 4.5m keep-alive loop — this is DEFAULT, not optional.** The event-driven watcher only fires at the *terminal* state and the health check fires *once* at T+4.5m; neither catches a mid-run auto-continue stall, so a stalled loop could otherwise burn hours unnoticed. So in addition to the two shells: schedule a self-wakeup ~4.5 min out via `ScheduleWakeup` (~270s — keeps the prompt cache warm). On each wakeup, run the §2b check — view the pane, resolve a stall if present — and then, **unless the watcher has already reported a terminal outcome, schedule the next wakeup ~4.5 min from then**; repeat until terminal. This guarantees a stall is caught within ~4.5 min, not hours.
+**Then start the recurring 4.5m keep-alive loop — this is DEFAULT, not optional.** The event-driven watcher only fires at the *terminal* state and the health check fires *once* at T+4.5m; neither catches a mid-run auto-continue stall, so a stalled loop could otherwise burn hours unnoticed. So in addition to the two shells: schedule a self-wakeup ~4.5 min out via `ScheduleWakeup` (~270s — keeps the prompt cache warm; do NOT stretch the interval past ~290s: 270s exists to stay under the 300s prompt-cache TTL, and a longer interval means a cold cache on every wakeup). On each wakeup, run the §2b tick — ONE Bash call that peeks the pane, probes worktree mtimes, and checks the terminal sentinels — resolve a stall if present, and then, **unless the watcher has already reported a terminal outcome or the tick's sentinel check hit, schedule the next wakeup ~4.5 min from then**; repeat until terminal. This guarantees a stall is caught within ~4.5 min, not hours.
 
 **Health check outcomes (fires at T+4.5m, single notification):**
 
@@ -144,9 +144,23 @@ On receiving either notification in a future turn, map the line to a user-facing
 
 The 4.5m health check and the terminal watcher are NOT sufficient on their own. The detached ralph loop is supposed to auto-send "continue" to start each next iteration, but on some hosts this **stalls at iteration boundaries**: the word `continue` is typed into the inner prompt and Enter is never submitted, so the inner agent sits idle (an observed stall sat ~3 hours). Between the health check and the terminal signal, **poll and re-nudge**:
 
-- **Cadence:** poll the pane roughly every ~4.5 min (270s — keeps the prompt cache warm) until the watcher fires a terminal outcome. Use the harness's own scheduling (e.g. `ScheduleWakeup`) rather than blocking `sleep`s.
-- **Peek:** `tmux -L committee-loop capture-pane -t <SESSION> -p | tail -45`.
-- **STALLED** = an idle prompt — `❯ continue`, or an empty `❯ ` with a `← for agents` / `new task? /clear` hint — and **no active spinner**. Corroborate with no recent worktree file activity: `find <WORKTREE_PATH> -type f -not -path '*/.git/*' -newermt '-6 minutes'` returns nothing.
+- **Cadence:** poll roughly every ~4.5 min (270s — keeps the prompt cache warm; do NOT stretch past ~290s — 270s stays under the 300s prompt-cache TTL, and anything longer buys a cold cache on every wakeup) until the watcher fires a terminal outcome. Use the harness's own scheduling (e.g. `ScheduleWakeup`) rather than blocking `sleep`s.
+- **Tick — ONE Bash call** (pane peek + mtime probe + sentinel check together; never split these into separate calls):
+  ```bash
+  SESSION="<SESSION>"; WORKTREE_PATH="<WORKTREE_PATH>"; ORIGIN_GIT_DIR="<ORIGIN_GIT_DIR>"  # from the manifest
+  ART_DIR="$ORIGIN_GIT_DIR/committee-loop/$SESSION"
+  tmux -L committee-loop capture-pane -t "$SESSION" -p | tail -45
+  echo '--- recent worktree writes (empty list + idle prompt = STALLED) ---'
+  # ISO timestamp, not '-6 minutes': the harness shims `find` to bfs, which rejects relative -newermt
+  find "$WORKTREE_PATH" -type f -not -path '*/.git/*' -newermt "$(date -d '-6 minutes' +%Y-%m-%dT%H:%M:%S)"
+  echo '--- terminal sentinels ---'
+  for s in "$ART_DIR/DONE" "$ART_DIR/CONVERGED.txt" "$ART_DIR/BLOCKED.txt" \
+           "$WORKTREE_PATH/.committee-loop-BLOCKED.txt" "$WORKTREE_PATH/.committee-loop-EXHAUSTED.txt"; do
+    [ -f "$s" ] && echo "SENTINEL: $s"
+  done; true
+  ```
+  If any `SENTINEL:` line appears, stop scheduling wakeups — the loop is terminal, and the watcher (already fired, or about to: it polls every 15s) owns classifying and reporting the outcome; the tick must NEVER declare a failure or outcome itself. No sentinel + live tmux = still running (the watcher's own rule) — classify only STALLED vs RUNNING and continue the chain.
+- **STALLED** = an idle prompt — `❯ continue`, or an empty `❯ ` with a `← for agents` / `new task? /clear` hint — and **no active spinner**. Corroborate with the tick's mtime probe: the "recent worktree writes" section lists nothing. (That `find` is the sole disambiguator for a spinner-idle or scrolled pane — never drop it from the tick.)
 - **RUNNING** = an active spinner line (`…· esc to interrupt`). Iterations legitimately take ~20–35 min (reviewers + verifiers), so a static tail *with* a spinner is normal — judge by spinner + fs activity, not "looks stuck."
 - **Recover** (a bare `Enter`/`C-m` does NOT submit — the line must be cleared and retyped):
   ```bash
@@ -239,7 +253,7 @@ On **no** (or a partial selection), do only what the user approved — or nothin
 
 ## Notes
 
-- macOS: install `coreutils` (`brew install coreutils`) AND put the gnubin symlinks on PATH so `realpath`, `sha256sum`, `readlink -f`, and `timeout` resolve to the GNU variants (not BSD `readlink` which lacks `-f`, and not a missing `timeout`). Example: `export PATH="$(brew --prefix)/opt/coreutils/libexec/gnubin:$PATH"` in your shell profile. `spawn.sh` preflight probes `timeout` and behavior-probes `realpath -e` so a missing GNU variant fails fast.
+- macOS: install `coreutils` (`brew install coreutils`) AND put the gnubin symlinks on PATH so `realpath`, `sha256sum`, `readlink -f`, `date -d`, and `timeout` resolve to the GNU variants (not BSD `readlink` which lacks `-f`, not BSD `date` which lacks `-d`, and not a missing `timeout`). Example: `export PATH="$(brew --prefix)/opt/coreutils/libexec/gnubin:$PATH"` in your shell profile. `spawn.sh` preflight probes `timeout` and behavior-probes `realpath -e` so a missing GNU variant fails fast.
 - `--dangerously-skip-permissions` does NOT bypass Claude Code's protected-paths guard for writes under `.claude/` (claude-code#35718). `spawn.sh` launches a watchdog that auto-answers that prompt. Targets outside `.claude/` never trigger it. Scope is enforced by the inner-agent instructions, not by sandboxing.
 - `--effort high` is the sweet spot for loop-agent discipline vs wall-time; `max` rarely pays off for single-file reviews.
 - Each ralph iteration is capped at 10; if the loop doesn't converge within that, the watcher reports `EXHAUSTED` and the worktree is preserved for inspection.
