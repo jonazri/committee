@@ -21,16 +21,23 @@ trap 'rm -rf "$STUB"' EXIT INT TERM
 # Hermetic PATH: coreutils for spawn.sh's dirname/pwd, plus our controllable stub dir.
 BASEPATH="$STUB:/usr/bin:/bin"
 
-# Case 1: headroom installed -> wrapped
+# Case 1: cclaude installed -> managed Headroom + cus launch
+printf '#!/bin/sh\nexit 0\n' > "$STUB/cclaude"; chmod +x "$STUB/cclaude"
+printf '#!/bin/sh\nexit 0\n' > "$STUB/headroom"; chmod +x "$STUB/headroom"
+got=$(PATH="$BASEPATH" bash "$SPAWN" --print-inner-launch "$ARGS")
+check "$got" "cclaude $ARGS" "cclaude installed -> managed launch"
+
+# Case 2: headroom installed, cclaude absent -> wrapped
+rm -f "$STUB/cclaude"
 printf '#!/bin/sh\nexit 0\n' > "$STUB/headroom"; chmod +x "$STUB/headroom"
 got=$(PATH="$BASEPATH" bash "$SPAWN" --print-inner-launch "$ARGS")
 check "$got" "headroom wrap claude -- $ARGS" "headroom installed -> wrapped launch"
 
-# Case 2: opt-out via COMMITTEE_HEADROOM=OFF (case-insensitive) -> bare claude
+# Case 3: opt-out via COMMITTEE_HEADROOM=OFF (case-insensitive) -> bare claude
 got=$(PATH="$BASEPATH" COMMITTEE_HEADROOM=OFF bash "$SPAWN" --print-inner-launch "$ARGS")
 check "$got" "claude $ARGS" "COMMITTEE_HEADROOM=OFF -> bare claude (case-insensitive, headroom present)"
 
-# Case 3: headroom NOT installed -> bare claude.
+# Case 4: headroom NOT installed -> bare claude.
 # Hermeticity guard: if a system headroom is still reachable WITHOUT the stub
 # (e.g. installed in /usr/bin), this case can't run hermetically — skip it with a
 # NOTE instead of emitting a false FAIL (codex/gemini committee finding).
