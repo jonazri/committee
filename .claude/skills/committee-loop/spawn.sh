@@ -398,9 +398,9 @@ printf '\n%s\n' "$RALPH_INVOCATION" >> "$PROMPT_FILE"
 # against total wall-time. `max` rarely pays off for single-file reviews.
 # INNER_LAUNCH_EXTRA defaults to "--effort high" and is overridden by --models
 # innerAgent.{effort,model} (validated charset-safe during arg-parse).
-# build_inner_launch (top of file) routes this through Headroom when available.
+# build_inner_launch (top of file) routes this through cclaude/Headroom when available.
 INNER_LAUNCH=$(build_inner_launch "--dangerously-skip-permissions $INNER_LAUNCH_EXTRA")
-case "$INNER_LAUNCH" in "headroom wrap "*) INNER_WRAPPED=1 ;; *) INNER_WRAPPED=0 ;; esac
+case "$INNER_LAUNCH" in "cclaude "*|"headroom wrap "*) INNER_WRAPPED=1 ;; *) INNER_WRAPPED=0 ;; esac
 tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$WORKTREE_PATH" \
   "$INNER_LAUNCH"
 
