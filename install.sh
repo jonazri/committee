@@ -22,6 +22,10 @@ SKILLS_DIR="$HOME/.claude/skills"
 _gd=$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir 2>/dev/null || true)
 _gcd=$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null || true)
 if [ -n "$_gd" ] && [ -n "$_gcd" ]; then
+  # Normalize BOTH through cd+pwd -P. On Git-for-Windows, --absolute-git-dir returns a
+  # Windows-style path (C:/Users/...) while the common-dir resolves to an MSYS path
+  # (/c/Users/...); comparing the raw strings would false-positive on the primary checkout.
+  _gd=$(cd -- "$_gd" 2>/dev/null && pwd -P || echo "$_gd")
   _gcd=$(cd -- "$REPO_ROOT" 2>/dev/null && cd -- "$_gcd" 2>/dev/null && pwd -P || true)
   if [ -n "$_gcd" ] && [ "$_gd" != "$_gcd" ]; then
     echo "install.sh: refusing to run from a linked git worktree:" >&2
