@@ -25,9 +25,11 @@ if [ -n "$_gd" ] && [ -n "$_gcd" ]; then
   # Normalize BOTH through cd+pwd -P. On Git-for-Windows, --absolute-git-dir returns a
   # Windows-style path (C:/Users/...) while the common-dir resolves to an MSYS path
   # (/c/Users/...); comparing the raw strings would false-positive on the primary checkout.
-  _gd=$(cd -- "$_gd" 2>/dev/null && pwd -P || echo "$_gd")
+  # Symmetric fail-open: if either path can't be resolved, skip the guard rather than
+  # comparing a raw path against a normalized one (which could false-positive).
+  _gd=$(cd -- "$_gd" 2>/dev/null && pwd -P || true)
   _gcd=$(cd -- "$REPO_ROOT" 2>/dev/null && cd -- "$_gcd" 2>/dev/null && pwd -P || true)
-  if [ -n "$_gcd" ] && [ "$_gd" != "$_gcd" ]; then
+  if [ -n "$_gd" ] && [ -n "$_gcd" ] && [ "$_gd" != "$_gcd" ]; then
     echo "install.sh: refusing to run from a linked git worktree:" >&2
     echo "  $REPO_ROOT" >&2
     echo "  Installing from a worktree repoints your global ~/.claude symlinks at a directory" >&2
