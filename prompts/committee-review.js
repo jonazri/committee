@@ -127,7 +127,14 @@ const adjNote = adjPath ? `PRIOR ADJUDICATIONS: first read ${adjPath}. It lists 
 // carriers runs lens-free with a logged warning (kiro/gemini share cliFraming, so neither
 // can carry a yours-alone lens without leaking it to the other).
 const antiRecencyLens = adjPath ? `COVERAGE LENS (yours alone): other reviewers concentrate on the recently-edited regions listed in ${adjPath}; you instead prioritize LATENT defects in the parts of the artifact NOT recently edited — long-standing premises, ordering/lifecycle assumptions, cross-section contradictions. Re-derive whether long-asserted claims are actually true instead of taking them as settled.` : ''
-const enabledFor = (n) => !enabledSet || enabledSet.has(n)
+// A zero-match allowlist is resolved to "no allowlist" HERE, before lens assignment and
+// prompt building, so lens semantics and the reviewer filter below share one effective
+// set: with enabledSet=['bogus'] the full panel runs AND the lens carriers stay assigned
+// (previously the lens was dropped with a misleading warning while all reviewers ran).
+const knownReviewerNames = ['claude', 'codex', 'kiro', 'gemini', 'gemini-pro', 'fable']
+const allowlistMatchesNone = !!enabledSet && !knownReviewerNames.some(n => enabledSet.has(n))
+const effectiveSet = allowlistMatchesNone ? null : enabledSet
+const enabledFor = (n) => !effectiveSet || effectiveSet.has(n)
 const proGetsLens = !!antiRecencyLens && enabledFor('gemini-pro')
 const claudeGetsLens = !!antiRecencyLens && !proGetsLens && enabledFor('claude')
 if (antiRecencyLens && !proGetsLens && !claudeGetsLens) log('committee: anti-recency lens unassigned — the reviewer subset excludes both gemini-pro and claude (its only carriers); this round runs without the lens')
@@ -355,7 +362,7 @@ ${staticNote}`
 const geminiProPrompt = `Run a second Gemini reviewer via the Antigravity CLI (agy), pinned to the latest pro model, for an independent review. Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
 Pinned to ${geminiProModel}${geminiProOverridden ? ' (operator override — no flash retry)' : ' (default latest pro)'}. Run as ONE Bash invocation with a ${geminiProOverridden ? '300000' : '600000'} ms timeout (this is the AGENT's Bash-tool budget; the LOAD-BEARING enforcement is the per-call \`timeout -k 30 240\` INSIDE each agy call — each agy call is hard-bounded at ~270s by the shell, so the no-override primary+retry sequence is shell-bounded ≤~540s regardless of this budget. Set the budget ABOVE that worst case so a legitimate retry is never truncated — a single 300s budget could not fit both):
   ${agyPipe(geminiProModel, 'gemini-pro', agyFramingPro)}${geminiProOverridden ? '' : `
-If ${a.sessionDir}/gemini-pro.md is empty after that call — OR non-empty but clearly NOT a review (e.g. the model claiming it received no content to review; an exit-0 non-review response slips the -s gate below, observed 2026-07-10) — run ONE Pro→Flash retry (same command, model gemini-3.5-flash) so the panel keeps a Gemini voice. In the non-empty-garbage case ONLY, first move the bad output aside so the -s gate opens and the attempt stays diagnosable — copy verbatim:
+If ${a.sessionDir}/gemini-pro.md is empty after that call — OR non-empty but clearly NOT a review (e.g. the model claiming it received no content to review; an exit-0 non-review response slips the -s gate below, observed 2026-07-10) — run ONE Pro→Flash retry (same command, model gemini-3.5-flash) so the panel keeps a Gemini voice. If unsure whether the output is a review, treat it as one — do NOT move it aside or retry (a mistaken mv would overwrite a valid Pro review with a Flash one). In the CLEARLY-non-review case ONLY, first move the bad output aside so the -s gate opens and the attempt stays diagnosable — copy verbatim:
   mv -f ${shq(`${a.sessionDir}/gemini-pro.md`)} ${shq(`${a.sessionDir}/gemini-pro.attempt1.md`)}
 Then in either case run the retry — copy verbatim:
   [ -s ${shq(`${a.sessionDir}/gemini-pro.md`)} ] || { ${agyPipe('gemini-3.5-flash', 'gemini-pro', agyFramingPro)}; }`}
@@ -394,22 +401,22 @@ const allReviewers = [
 // the Claude entry at dispatch, never baked into claudePrompt), so a lens-carrying Claude plus an
 // opted-in Fable never yields two lens carriers.
 const fableModel = safeTok(a.fableModel, MODEL_RE) || 'fable'
-if (a.includeFable === true || (enabledSet && enabledSet.has('fable'))) {
+if (a.includeFable === true || (effectiveSet && effectiveSet.has('fable'))) {
   allReviewers.push({ name: 'Fable', prompt: claudePrompt, model: fableModel })
 }
-// Apply the operator reviewer-subset allowlist. An allowlist that matches none is ignored
-// (running zero reviewers is never useful) and the full panel runs, with a logged warning.
+// Apply the operator reviewer-subset allowlist via effectiveSet (a zero-match allowlist
+// was already resolved to null above, keeping the lens assignment consistent with this
+// filter). effectiveSet matches ≥1 known name and every known name maps to a present
+// reviewer (fable is pushed whenever the set names it), so `filtered` is never empty.
 let reviewers = allReviewers
-if (enabledSet) {
-  const filtered = allReviewers.filter(r => enabledSet.has(r.name.toLowerCase()))
-  const dropped = allReviewers.filter(r => !enabledSet.has(r.name.toLowerCase())).map(r => r.name)
-  if (filtered.length) {
-    reviewers = filtered
-    if (dropped.length) log(`committee: operator subset — running ${filtered.map(r => r.name).join(', ')}; skipped ${dropped.join(', ')}`)
-    if (filtered.length < 2) log(`committee: WARNING — operator subset leaves ${filtered.length} reviewer(s); the 2-reviewer quorum cannot be met and the result will report degraded:true`)
-  } else {
-    log(`committee: enabledReviewers [${[...enabledSet].join(', ')}] matched no reviewer — ignoring the allowlist and running the full panel (${allReviewers.length} reviewers)`)
-  }
+if (effectiveSet) {
+  const filtered = allReviewers.filter(r => effectiveSet.has(r.name.toLowerCase()))
+  const dropped = allReviewers.filter(r => !effectiveSet.has(r.name.toLowerCase())).map(r => r.name)
+  reviewers = filtered
+  if (dropped.length) log(`committee: operator subset — running ${filtered.map(r => r.name).join(', ')}; skipped ${dropped.join(', ')}`)
+  if (filtered.length < 2) log(`committee: WARNING — operator subset leaves ${filtered.length} reviewer(s); the 2-reviewer quorum cannot be met and the result will report degraded:true`)
+} else if (allowlistMatchesNone) {
+  log(`committee: enabledReviewers [${[...enabledSet].join(', ')}] matched no reviewer — ignoring the allowlist and running the full panel (${allReviewers.length} reviewers)`)
 }
 
 // pipeline() fans stage-1 (review) out across all reviewers concurrently — this IS
