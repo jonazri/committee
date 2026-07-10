@@ -131,6 +131,10 @@ const antiRecencyLens = adjPath ? `COVERAGE LENS (yours alone): other reviewers 
 // prompt building, so lens semantics and the reviewer filter below share one effective
 // set: with enabledSet=['bogus'] the full panel runs AND the lens carriers stay assigned
 // (previously the lens was dropped with a misleading warning while all reviewers ran).
+// INVARIANT: every name here maps to a reviewer present in (or pushed into) allReviewers
+// below — the subset filter's "filtered is never empty" reasoning rests on this list and
+// that construction staying in sync; update both together. (A future desync would not
+// crash — pipeline([]) yields quorum 0 / degraded:true — but it would silently run no one.)
 const knownReviewerNames = ['claude', 'codex', 'kiro', 'gemini', 'gemini-pro', 'fable']
 const allowlistMatchesNone = !!enabledSet && !knownReviewerNames.some(n => enabledSet.has(n))
 const effectiveSet = allowlistMatchesNone ? null : enabledSet
@@ -399,7 +403,10 @@ const allReviewers = [
 // verified and synthesized generically (the verify stage + return key on rev.reviewer). It reuses
 // claudePrompt VERBATIM — deliberately the lens-free variant (the anti-recency lens is attached to
 // the Claude entry at dispatch, never baked into claudePrompt), so a lens-carrying Claude plus an
-// opted-in Fable never yields two lens carriers.
+// opted-in Fable never yields two lens carriers. PRECEDENCE when both opt-in paths are given: the
+// allowlist is authoritative — includeFable:true alongside an enabledReviewers list that omits
+// 'fable' pushes Fable and then filters it out (logged as skipped); name 'fable' in the allowlist
+// to keep it. includeFable alone (no allowlist) adds it unconditionally.
 const fableModel = safeTok(a.fableModel, MODEL_RE) || 'fable'
 if (a.includeFable === true || (effectiveSet && effectiveSet.has('fable'))) {
   allReviewers.push({ name: 'Fable', prompt: claudePrompt, model: fableModel })
