@@ -206,9 +206,11 @@ Append one entry per Critical/Important finding regardless of outcome:
 - **Verification:** <command run> -> <outcome>
 - **Class:** soundness | polish        (soundness-gate runs only)
 - **Area:** <short subsystem/section label, e.g. "teardown ordering", "trust modes">
-- **Decision:** applied | rejected | deferred | backlogged (polish)
+- **Decision:** applied | rejected | deferred | backlogged (polish)   (backlogged: soundness-gate runs only)
 - **Rationale:** <why>
 ```
+
+(Under the `default` gate, omit the `Class` line and never use `backlogged (polish)` — those exist only where the class gate runs; the recorded decision VALUE stays exactly `backlogged (polish)` so the skip-check/re-escalation greps match.)
 
 <hot_areas>
 After writing this iteration's entries, recompute a `## HOT AREAS` section at the TOP of the ledger: for each distinct `**Area:**` label, count APPLIED findings across ALL iterations; list every area with ≥3 applied findings spanning ≥2 iterations as `<area>: N applied findings over M iterations — resisted repeated prose fixes; recommend a prototype/test/executable oracle instead of further spec review`. (Evidence: one reap/teardown-ordering subsystem produced a real soundness defect at EVERY fix across a whole loop — the class of thing a 20-line test nails deterministically while a prose panel keeps circling.) Carry this section into the terminal report.

@@ -355,7 +355,9 @@ ${staticNote}`
 const geminiProPrompt = `Run a second Gemini reviewer via the Antigravity CLI (agy), pinned to the latest pro model, for an independent review. Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
 Pinned to ${geminiProModel}${geminiProOverridden ? ' (operator override — no flash retry)' : ' (default latest pro)'}. Run as ONE Bash invocation with a ${geminiProOverridden ? '300000' : '600000'} ms timeout (this is the AGENT's Bash-tool budget; the LOAD-BEARING enforcement is the per-call \`timeout -k 30 240\` INSIDE each agy call — each agy call is hard-bounded at ~270s by the shell, so the no-override primary+retry sequence is shell-bounded ≤~540s regardless of this budget. Set the budget ABOVE that worst case so a legitimate retry is never truncated — a single 300s budget could not fit both):
   ${agyPipe(geminiProModel, 'gemini-pro', agyFramingPro)}${geminiProOverridden ? '' : `
-If ${a.sessionDir}/gemini-pro.md is empty after that call — OR non-empty but clearly NOT a review (e.g. the model claiming it received no content to review; an exit-0 non-review response slips the -s gate below, observed 2026-07-10) — run ONE Pro→Flash retry (same command, model gemini-3.5-flash) so the panel keeps a Gemini voice. In the non-empty-garbage case, first move the bad output aside (mv, so the -s gate opens and the attempt stays diagnosable), then copy verbatim:
+If ${a.sessionDir}/gemini-pro.md is empty after that call — OR non-empty but clearly NOT a review (e.g. the model claiming it received no content to review; an exit-0 non-review response slips the -s gate below, observed 2026-07-10) — run ONE Pro→Flash retry (same command, model gemini-3.5-flash) so the panel keeps a Gemini voice. In the non-empty-garbage case ONLY, first move the bad output aside so the -s gate opens and the attempt stays diagnosable — copy verbatim:
+  mv -f ${shq(`${a.sessionDir}/gemini-pro.md`)} ${shq(`${a.sessionDir}/gemini-pro.attempt1.md`)}
+Then in either case run the retry — copy verbatim:
   [ -s ${shq(`${a.sessionDir}/gemini-pro.md`)} ] || { ${agyPipe('gemini-3.5-flash', 'gemini-pro', agyFramingPro)}; }`}
 If ${a.sessionDir}/gemini-pro.md is still empty${geminiProOverridden ? '' : ' (or still not a review) after the retry'}, set ran_ok=false with the reason from ${a.sessionDir}/gemini-pro.err. Otherwise parse the output into findings${geminiProOverridden ? '' : ' (note in your result if the flash retry produced them)'}.
 ${specNote}
@@ -406,7 +408,7 @@ if (enabledSet) {
     if (dropped.length) log(`committee: operator subset — running ${filtered.map(r => r.name).join(', ')}; skipped ${dropped.join(', ')}`)
     if (filtered.length < 2) log(`committee: WARNING — operator subset leaves ${filtered.length} reviewer(s); the 2-reviewer quorum cannot be met and the result will report degraded:true`)
   } else {
-    log(`committee: enabledReviewers [${[...enabledSet].join(', ')}] matched no reviewer — ignoring the allowlist and running all five`)
+    log(`committee: enabledReviewers [${[...enabledSet].join(', ')}] matched no reviewer — ignoring the allowlist and running the full panel (${allReviewers.length} reviewers)`)
   }
 }
 

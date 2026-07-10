@@ -136,7 +136,7 @@ Each call returns a shell ID — save both and include in the user report so the
 
 <watcher_outcomes>
 - `DONE:<sha>` — loop finished clean; commit `<sha>` on origin's branch at spawn time (`ORIGIN_REF` from the manifest; post.sh refuses to copy back if that branch moved).
-- `CONVERGED:<sha>` — finished, but converged to avoid oscillation; see `decisions.md` in the artifact dir.
+- `CONVERGED:<sha>` — finished via a convergence trigger; `CONVERGED.txt` in the artifact dir says which: SOUNDNESS-CONVERGED (soundness gate — zero soundness-blocking findings; the `polish.md` backlog may be non-empty by design) or an oscillation/re-flag stop (default gate). See `decisions.md` for the trail.
 - `BLOCKED:<reason>` — origin target changed during review, target became a symlink, multi-target run partially blocked, or origin's branch moved. Worktree preserved.
 - `EXHAUSTED` — ralph ran out of iterations without emitting the promise; no copy-back, worktree preserved.
 - `TMUX_DIED` — tmux died without writing any sentinel (crashed or killed manually).
@@ -232,7 +232,8 @@ Outcomes (artifacts land under <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/):
                                    incorrect/insecure/non-functional. Documentation-polish items may remain in polish.md —
                                    non-blocking BY DESIGN, and the result is best-effort adversarial review, not a
                                    correctness proof.
-- REVIEW CLEAN + CONVERGED.txt -> same as CLEAN, but the sidecar names an oscillating finding; check decisions.md.
+- REVIEW CLEAN + CONVERGED.txt -> same as CLEAN; the sidecar says WHY it converged — SOUNDNESS-CONVERGED (soundness gate;
+                                   polish.md may be non-empty by design) or an oscillating/re-flagged finding (default gate); check decisions.md.
 - .committee-loop-BLOCKED.txt   -> origin target changed/became-a-symlink during review, a multi-target run blocked mid-loop, origin's branch moved, or origin had unrelated staged index changes that would be swept into the review commit.
                                    Vetted writes ARE committed (marked "(PARTIAL)" or "(BRANCH MOVED)") EXCEPT when the block reason is an index conflict (pre-existing OR concurrent unrelated staged changes): those runs leave reviewed bytes in origin's working tree UNCOMMITTED and the user must resolve the conflicting index state before staging/committing manually. Worktree preserved for inspection either way.
 - .committee-loop-EXHAUSTED.txt -> ran out of ralph iterations without emitting the promise; no copy-back, worktree preserved.
