@@ -7,6 +7,7 @@ You run inside a detached worktree. Ralph-loop feeds you this prompt each iterat
 - Apply a finding without logging it in `.committee-loop-decisions.md`
 - Reverse a prior iteration's fix because a *different* reviewer complained (that is not new evidence)
 - Edit for a Minor finding (route to `.committee-loop-DEFERRED.md` instead)
+- Under the soundness gate: edit the target for a POLISH-classified finding, or refuse to converge because the polish backlog is non-empty (polish routes to `.committee-loop-POLISH.md` and never blocks)
 - Skip the verification command for a single-reviewer Critical
 - Edit any file other than the target(s) or `.committee-loop-*` sidecars at the worktree root
 - Write BLOCKED/EXHAUSTED, converge, or emit the promise because a subagent, the `/committee` workflow, a verifier, or a nested session hit a 429 / rate limit / "resets in N hours" — that is a TRANSIENT error, not a finding and not a real wall; retry with backoff (see *Rate limits* below)
@@ -45,6 +46,17 @@ Session limits, 429s, and "throttling" are **fake news** for this loop — never
 
 ## Per-iteration workflow
 
+<gate_mode>
+**Resolve the severity-gate mode once per iteration (cheap, mechanical):**
+
+1. If `.committee-loop-gate.txt` exists at the worktree root, its content is the mode: `soundness` or `default` (operator-pinned at spawn).
+2. Otherwise AUTO: if EVERY target file has a document extension (`.md`, `.markdown`, `.rst`, `.adoc`, `.txt`) → `soundness`; any code target → `default`.
+
+Record the mode in each iteration's ledger section header, e.g. `## iter-N (… [gate: soundness])`.
+
+Why two modes: code converges against an oracle (tests), so blocking on every verified Important terminates. A prose spec/plan has no oracle — precision/completeness findings are inexhaustible, and a gate that blocks on all of them never converges (two 10/10-EXHAUSTED loops proved it). Under the `soundness` gate, only findings that would make a competent implementer build something incorrect/insecure/non-functional block convergence; the rest are backlogged, not applied (see `<gate name="class">`).
+</gate_mode>
+
 ### 0. Start-of-iteration guards (run FIRST, before anything else)
 
 - **If `.committee-loop-BLOCKED.txt` exists → STOP immediately.** Do NOT run simplify, `/committee`, or `post.sh`, and do NOT emit the promise. A prior iteration already hit an unrecoverable BLOCKED condition (e.g. `/committee` never returned) and preserved the worktree for the watcher. Without this guard, ralph re-feeds the prompt and every remaining iteration re-runs the full simplify+`/committee` workflow before exhaustion — wasting quota/wall-time and re-writing BLOCKED each time. (Mirrors the `FINAL-PASS-DONE` early-exit in the end-pass.)
@@ -74,6 +86,19 @@ Do NOT use `/committee` in iter-1 — its workflow includes Gemini and its own s
 
 **Iter-2+ — full mode.** Use `/committee --files <TARGET...> --trust=read-only` (all 5 reviewers, including both Gemini models), plus any operator override flags from `<operator_model_overrides>` and the `--reviewer-model` from `<model_selection>`. In multi-target runs, pass every `TARGET_FILES` entry as separate space-separated arguments after `--files`. Gemini's perspective joins once the file is already cleaner from iter-1 fixes, reducing noise. The `--trust=read-only` flag skips the interactive trust dialog (required for unattended runs) AND holds every CLI reviewer to reads only: committee-loop only ever *reads* the target to review it — the inner agent applies all edits — so reviewers never need write/shell access. **Read-only is the right mode here (committee-loop reviewers only ever read):** a document target is frequently a plan whose imperative steps a reviewer must NOT execute. Before 2026-06-23 an auto-trust reviewer (`kiro --trust-all-tools`, `agy --dangerously-skip-permissions`) would *execute* such a plan instead of reviewing it (2026-06-11: a Gemini reviewer scaffolded and committed a plan's build steps into the worktree as 4 stray commits). That hole is now closed in BOTH trust modes — Kiro always runs `--trust-tools=fs_read` and `agy` always runs under a `permissions.deny` lockdown denying writes+shell — but committee-loop still passes `--trust=read-only` because read-only ALSO denies the network/URL exfil channel and the loop never needs anything but reads. (iter-1's CLIs are already read-only — `kiro --trust-tools=fs_read`, `codex --sandbox read-only`; this makes iter-2+ consistent.)
 
+<panel_adjudications>
+**Feed the panel the settled record (iter-2+ and the end-pass).** Reviewers are stateless across rounds: without this, the same refuted concern gets re-raised and re-refuted at full verifier cost every time it recurs (one PGID concern was challenged as critical and empirically re-refuted THREE separate times in a single loop — pure wasted compute). Before each `/committee` dispatch:
+
+1. Regenerate `.committee-loop-adjudications.md` at the worktree root from the ledger:
+   - `## Refuted` — every ledger entry rejected on a refuting verification probe: `<id> — <one-line claim> — REFUTED: <one-line evidence>`.
+   - `## Settled / accepted risk` — deliberate no-action adjudications and accepted-risk decisions, one line each with the recorded rationale.
+   - `## Recently edited` — the files/sections/line-ranges changed by iter-(N−1) (you already computed this diff for target segmentation). This section powers the workflow's anti-recency coverage lens.
+   - Cap at ~60 lines: keep the most recent and most-re-raised items, drop the tail.
+2. Append `--adjudications=$PWD/.committee-loop-adjudications.md` (absolute path) to the `/committee` invocation. The workflow injects it into every reviewer AND verifier prompt with the re-raise rule (listed items may be re-raised only with NEW verification evidence of equal or greater weight; a differing opinion is not new evidence).
+
+Skip both steps only when there is nothing to write (no refuted/settled entries AND no prior-iteration diff — typically only iter-2 of a quiet loop).
+</panel_adjudications>
+
 <committee_no_return>
 **`/committee` MUST return a structured result before you may converge — a missing review is NOT a passing review.** `/committee` returns `{ quorum, degraded, perReviewer }`, which you ingest in step 3 to classify findings. If `/committee` does NOT return within ~35 minutes (well above its normal ~8–10 min and clear of the ~25 min worst case when Kiro uses its full 1200 s budget — e.g. a reviewer/verifier agent wedged the workflow), the iteration is INCOMPLETE: do NOT treat it as `clean`, do NOT enter the end-pass, do NOT run `post.sh`. Instead — re-invoke `/committee` ONCE; if it still returns nothing, write `.committee-loop-BLOCKED.txt` (reason: `iter-<N> /committee did not return a result`) and STOP without emitting the promise. **A rate-limit/429 is NOT a "no-return" for this guard:** if the delay is throttling (a reviewer/verifier or the workflow surfacing a rate-limit / quota / "resets in N hours" message), retry past it with backoff (see *Rate limits & transient API errors* above) — do NOT count it toward the one re-invoke and do NOT write BLOCKED; this guard's BLOCKED path is only for a genuine hang with no rate-limit signal. The watcher then reports BLOCKED and the worktree is preserved — far better than a false `DONE`/clean that silently drops the iteration's findings. (The workflow itself also self-bounds each reviewer/verifier agent at 2h; this is the loop-side guard for when the whole review still fails to come back.)
 </committee_no_return>
@@ -99,10 +124,21 @@ At the START of every iteration (and the end-pass), check for `.committee-loop-m
 - `reviewers["gemini-pro"].model` → `--gemini-pro-model=<v>`
 - `verifier.model` → `--verifier-model=<v>`
 - **Reviewer subset:** if ANY `reviewers.<name>.enabled` is `false`, build `--reviewers=<csv>` listing only the ENABLED reviewers (from `claude,codex,kiro,gemini,gemini-pro`; a reviewer with no entry or `enabled` omitted counts as enabled). Also honor it in iter-1 fast mode: skip a disabled reviewer among Claude/Kiro/Codex there (Gemini is already skipped in iter-1), and adjust the quorum note accordingly (a disabled reviewer is not a "miss"). If the allowlist would be empty, ignore it.
+- **Fable (opt-IN 6th reviewer):** `fable` is excluded unless `reviewers.fable.enabled` is `true`. When it is, build `--reviewers=<csv>` (even if nothing was disabled) listing every enabled default reviewer PLUS `fable`, and pass `reviewers.fable.model` as `--fable-model=<v>` if set. Fable joins iter-2+ `/committee` rounds and the end-pass only — never iter-1 fast mode. (A same-family second Claude voice measurably pays: in the 2026-07 evidence loop Fable independently found a forgery hole the rest of the panel missed.)
 - **`innerAgent.model`/`innerAgent.effort`** are NOT your concern — they were applied to your own launch at spawn time; you cannot change them mid-run.
 
 **Claude reviewer (interacts with `<model_selection>` below):** if `reviewers.claude.model` is set AND `reviewers.claude.policy` is `"pin"` (or `policy` is omitted — a set model defaults to pinned), the operator's choice is law: pass `--reviewer-model=<reviewers.claude.model>` on EVERY iteration (iter-1 baseline through end-pass) and SKIP the entire `<model_selection>` step-down/re-escalation logic. Only if `reviewers.claude.policy` is `"adaptive"` (or there is no `reviewers.claude.model`) does `<model_selection>` run as written. Note this choice in the ledger section header (e.g. `[opus pinned by operator]`).
 </operator_model_overrides>
+
+<reviewer_drop>
+**Stop dispatching a reviewer that has failed three straight iterations.** (Evidence: one loop re-dispatched Kiro every round for 10+ rounds of `ServiceQuotaExceededException` — zero usable reviews, and its in-workflow shell timeout is the panel's worst-case wall-clock.)
+
+- **Record availability:** each iteration's ledger section header (or its first line) records a `Panel:` note listing each dispatched reviewer as `ok` or `failed(<reason>)`, taken from `/committee`'s `perReviewer[].ran_ok`/`note` (iter-1: from the three direct dispatches).
+- **Drop rule (checked before each dispatch):** a reviewer whose review failed for a REVIEWER-SIDE reason (quota/overage, auth, service unavailability — i.e. it stayed dead despite the in-round transient handling) in ALL of the last 3 COMPLETED iterations is dropped for the REST of the loop, including the end-pass: exclude it from the `--reviewers` csv (intersect with the operator subset and the fable opt-in).
+- **Bounds:** NEVER drop `claude` (its failures are session-wide transients the retry rule already handles — and a session-wide wall fails every reviewer at once, which is not reviewer-side evidence against any one of them). Never drop below 2 enabled reviewers — the floor counts every enabled reviewer, including an opted-in `fable`. If several reviewers qualify at once and dropping all would breach the floor, drop in order of longest consecutive-failure streak (tie: drop the slower reviewer first — wall-clock is the cost being saved) and stop at the floor. Iterations where the WHOLE round failed (quorum 0, session limit) count for no one.
+- **Report it:** note the drop in the ledger (`Dropped <name> after 3 consecutive reviewer-side failures`) and in the terminal report, so the reduced panel is visible.
+- This rule operates ACROSS iterations and does not change the in-round rule above: within an iteration, rate-limits/429s are still retried with backoff, never treated as failure.
+</reviewer_drop>
 
 <model_selection>
 **First check `<operator_model_overrides>`: if the Claude reviewer is pinned, that fully replaces this block — do not run the step-down/re-escalation below.** Otherwise:
@@ -117,7 +153,7 @@ You are a FRESH process each iteration with NO memory of prior iterations — so
    ```
 
    Rationale: by iter-3 the easy Critical/Important findings are surfaced; remaining issues are subtler but within Sonnet's range. Sonnet returns reviews in ~3 min vs Opus's ~8 min; the quorum gate tolerates any per-reviewer miss.
-3. **Re-escalation override (iter-3+):** read the IMMEDIATELY-PRECEDING iteration's section of the ledger and count its findings with `**Severity:** critical` AND `**Decision:** applied` (an applied Critical is by definition new — the ledger gate at `<gate name="ledger">` rejects re-flags). If that count is **≥1**, run THIS iteration at Opus (omit `--reviewer-model`); a live Critical falsifies the step-down's premise that the deep findings are exhausted, so buy full Claude depth while the design is back in flux. If the count is **0**, use Sonnet per step 2.
+3. **Re-escalation override (iter-3+):** read the IMMEDIATELY-PRECEDING iteration's section of the ledger and count its findings with `**Severity:** critical` AND `**Decision:** applied` (an applied Critical is by definition new — the ledger gate at `<gate name="ledger">` rejects re-flags; a `backlogged (polish)` Critical deliberately does NOT count — polish never re-escalates). If that count is **≥1**, run THIS iteration at Opus (omit `--reviewer-model`); a live Critical falsifies the step-down's premise that the deep findings are exhausted, so buy full Claude depth while the design is back in flux. If the count is **0**, use Sonnet per step 2.
 
 This single rule is self-correcting and needs no recorded model history: the iteration after a new Critical runs Opus; once an (Opus or Sonnet) iteration produces zero new applied Criticals, the next iteration steps back to Sonnet automatically. (It is mechanical on purpose — the older "revert if quality visibly degrades" advice required a judgment an unattended loop never exercised.)
 
@@ -136,7 +172,7 @@ Each verifier:
 - Returns a decision proposal per finding with its verification evidence
 - If a claim's evidence sits behind a Headroom compression marker (`[… compressed … hash=…]`), expands it losslessly via the Headroom retrieve MCP tool (`headroom_retrieve`) before issuing a verdict — Headroom compression is non-destructive, so the verdict rests on the original bytes, not the marker. (No-op when the session is not Headroom-wrapped; committee-loop's detached session is wrapped whenever `headroom` is installed.)
 
-Write ledger entries serially once all verifiers return (append-order matters). Apply the three gates below — ALL must pass to apply a finding:
+Write ledger entries serially once all verifiers return (append-order matters). Apply the gates below — severity, quorum, and ledger always; the class gate additionally when the gate mode is `soundness` — ALL applicable gates must pass to apply a finding:
 
 <gate name="severity">
 Only CRITICAL and IMPORTANT findings are candidates for application. Append Minor findings verbatim to `.committee-loop-DEFERRED.md` and move on.
@@ -154,6 +190,13 @@ Single-reviewer claims without a passing verification probe do NOT pass this gat
 Read `.committee-loop-decisions.md` if it exists. If this finding (or its inverse) was previously decided, you may NOT reverse that decision without new evidence of equal or greater weight — a new verification probe whose output contradicts the prior one. A different reviewer's opinion is NOT new evidence.
 </gate>
 
+<gate name="class">
+**Runs ONLY when the gate mode is `soundness` (see `<gate_mode>`).** Classify each finding that passed severity+quorum+ledger as SOUNDNESS-BLOCKING or POLISH per the rubric in `.committee-loop-SOUNDNESS-GATE.md` (S1 security / S2 correctness-liveness / S3 load-bearing contradiction vs documentation precision/completeness). Tie-breaker: *"Would the BUILT system be broken/insecure without this change?"* — when genuinely unsure, classify SOUNDNESS (this gate must never backlog a disguised defect).
+
+- **SOUNDNESS** → apply it (it blocks a clean verdict).
+- **POLISH** → append the full finding (reviewer, severity, claim, evidence) to `.committee-loop-POLISH.md` and do NOT edit the target. Ledger decision: `backlogged (polish)`. Polish findings never block convergence and are never applied by the loop — they are for a later editorial pass or the implementation session. This is what stops the fix→new-prose→new-findings churn: the reviewed spec in the evidence loops grew +42% while being "refined", and the loop's own edits were a top finding source.
+</gate>
+
 Append one entry per Critical/Important finding regardless of outcome:
 
 ```
@@ -161,20 +204,30 @@ Append one entry per Critical/Important finding regardless of outcome:
 - **Severity:** critical | important
 - **Claim:** <one-line summary>
 - **Verification:** <command run> -> <outcome>
-- **Decision:** applied | rejected | deferred
+- **Class:** soundness | polish        (soundness-gate runs only)
+- **Area:** <short subsystem/section label, e.g. "teardown ordering", "trust modes">
+- **Decision:** applied | rejected | deferred | backlogged (polish)
 - **Rationale:** <why>
 ```
+
+<hot_areas>
+After writing this iteration's entries, recompute a `## HOT AREAS` section at the TOP of the ledger: for each distinct `**Area:**` label, count APPLIED findings across ALL iterations; list every area with ≥3 applied findings spanning ≥2 iterations as `<area>: N applied findings over M iterations — resisted repeated prose fixes; recommend a prototype/test/executable oracle instead of further spec review`. (Evidence: one reap/teardown-ordering subsystem produced a real soundness defect at EVERY fix across a whole loop — the class of thing a 20-line test nails deterministically while a prose panel keeps circling.) Carry this section into the terminal report.
+</hot_areas>
 
 ### 4. Apply sequentially, then consistency-sweep
 
 Same-file edits cannot be parallelized safely. Apply "applied" findings one at a time with the SMALLEST edit that addresses each.
 
+**Edit-in-place discipline (doc targets especially):** prefer REPLACING or TIGHTENING existing prose over appending new paragraphs — every appended claim is new reviewable surface that seeds next round's findings (one reviewed spec grew +42% while being "refined", and corrections of the loop's own edits became the top finding source). A fix that grows the target needs a reason; shrinking while fixing is the ideal. After committing, run `wc -l` on each target and append to this iteration's ledger section: `Target size: <file>: N lines (Δ±M)`. Iter-1 has no prior entry — log the absolute count as `Target size: <file>: N lines (Δ n/a — baseline)`; later iterations compute Δ against the previous iteration's entry. If the target has grown for 3 consecutive iterations, note the growth smell explicitly and bias the next iteration's edits toward replace/shrink.
+
 <consistency_sweep>
 After ALL of this iteration's edits are applied and BEFORE committing, dispatch ONE `general-purpose` subagent with `model: "sonnet"` to catch the consistency damage the edits themselves introduced. (Measured cost of skipping this: in a 10-iteration run, ~a third of all applied findings were repairs of contradictions/stale cross-references that earlier iterations' own edits left behind — each surfacing only via a full ~16-min committee round.)
 
-Give it the target path(s), the output of `git diff` (this iteration's uncommitted edits), and this task: *"Read the diff to identify the regions just edited, then read the full target file(s). Report ONLY defects INTRODUCED or EXPOSED by these edits: (a) text elsewhere in the document that still references the pre-edit wording, labels, numbering, or claims; (b) statements that now contradict an edited region; (c) dangling cross-references (sections, table rows, task names the edits renamed or removed). For each: file:line, the conflicting text, and a minimal one-clause repair that is a PURE reference/wording substitution. Do NOT review for new issues, do NOT suggest improvements beyond reference-consistency, do NOT propose restructuring, and NEVER propose a repair that changes the described system's behavior, resource bounds, failure modes, interfaces, or security posture (that is a technical change, not a consistency repair — report it as out-of-scope instead of repairing it)."*
+Give it the target path(s), the output of `git diff` (this iteration's uncommitted edits), and this task: *"Read the diff to identify the regions just edited, then read the full target file(s). Report ONLY defects INTRODUCED or EXPOSED by these edits, in two classes. CLASS-A (reference consistency): (a) text elsewhere in the document that still references the pre-edit wording, labels, numbering, or claims; (b) statements that now contradict an edited region's wording; (c) dangling cross-references (sections, table rows, task names the edits renamed or removed). For each CLASS-A: file:line, the conflicting text, and a minimal one-clause repair that is a PURE reference/wording substitution. CLASS-B (behavioral contradiction): passages elsewhere that still assert a BEHAVIOR, ORDERING, CONTRACT, or INVARIANT these edits changed — execution order, step sequencing and dependencies, failure modes, security posture, resource bounds, interfaces — so the passage is now false, or the document now mandates two incompatible behaviors. For each CLASS-B: file:line of BOTH passages, what the edit changed, what the other passage still asserts — do NOT propose a repair. Do NOT review for new issues unrelated to these edits, do NOT suggest improvements beyond these two classes, do NOT propose restructuring."*
 
-**Diff-shape constraint (bounds this un-gated edit class):** apply ONLY repairs that are pure text/reference substitutions matching the definition above — re-pointing a stale cross-reference, syncing a renamed label/number, re-wording to match an edited claim. If a proposed "repair" would change behavior/bounds/failure-modes/interfaces/security, it is a NEW technical finding, NOT a sweep repair: do not apply it here — route it to the next iteration's review (note it in the ledger so it surfaces). The sweep is applied without the three gates (it is mechanical reference fixes to YOUR OWN edits, not reviewer findings), so the diff-shape constraint is what keeps it safe.
+**Diff-shape constraint (bounds this un-gated edit class):** apply ONLY CLASS-A repairs — pure text/reference substitutions: re-pointing a stale cross-reference, syncing a renamed label/number, re-wording to match an edited claim. Anything that would change behavior/bounds/failure-modes/interfaces/security is CLASS-B by definition and is never applied as a sweep repair.
+
+**CLASS-B handling — the per-fix self-review:** each CLASS-B report is a candidate defect in YOUR OWN just-applied edits; catching it now is one cheap probe, while missing it costs a full committee round next iteration (a reorder fix once shipped two behavioral self-contradictions that a reference-only sweep missed — both burned confirming rounds to find). For each: read both passages and verify the contradiction directly (plus a probe where testable). CONFIRMED → apply the minimal reconciling fix THIS iteration under the normal single-source+verified quorum path, with a ledger entry `## <iteration>-sweep-behavioral-<short-id>` (severity per the rubric; Decision: applied — a CLASS-B contradiction is behavioral by definition, so under the soundness gate it always classes SOUNDNESS (S2/S3), never polish). AMBIGUOUS (you cannot tell which passage is right) → do NOT guess: note it in the ledger so the next round's review adjudicates it. The sweep is applied without the three gates (it is mechanical reference fixes to YOUR OWN edits, not reviewer findings), so the diff-shape constraint is what keeps it safe.
 
 **Audit trail:** for EACH applied sweep repair, append a ledger entry under this iteration's section so the `<gate name="ledger">` can recognize it if a later reviewer wants to reverse it:
 
@@ -193,7 +246,7 @@ Commit the findings' edits and the sweep's repairs together, with a message nami
 
 ### 5. Generated-file sync (only when reviewing committee-loop itself)
 
-Runtime files that spawn generates from the skill's source: `.committee-loop-post.sh` (← `post-body.sh`), `.committee-loop-watcher.sh` (← `watcher-body.sh`), `.committee-loop-instructions.md` (← `inner-agent.md`), `.committee-loop-prompt.txt` (← the prompt heredoc in `spawn.sh`). If your fix edits a source region whose content was copied into a runtime file, apply the equivalent edit directly to the runtime file in the same commit.
+Runtime files that spawn generates from the skill's source: `.committee-loop-post.sh` (← `post-body.sh`), `.committee-loop-watcher.sh` (← `watcher-body.sh`), `.committee-loop-instructions.md` (← `inner-agent.md`), `.committee-loop-prompt.txt` (← the prompt heredoc in `spawn.sh`), `.committee-loop-SOUNDNESS-GATE.md` (← `soundness-gate.md`). If your fix edits a source region whose content was copied into a runtime file, apply the equivalent edit directly to the runtime file in the same commit.
 
 Only `.committee-loop-post.sh` actually runs after the fix; the others are moot post-spawn but syncing them keeps the ledger's iteration-boundary references consistent.
 
@@ -202,13 +255,13 @@ Only `.committee-loop-post.sh` actually runs after the fix; the others are moot 
 <convergence_exit>
 Any of these triggers runs the end-pass below (entry conditions are mutually exclusive — use the first that applies):
 
-<trigger name="clean">A COMPLETED review (the iter-2+ `/committee` aggregate, or iter-1's reviewer set) returned zero Critical+Important findings this iteration. No CONVERGED.txt is written. A `/committee` that did not return is NOT a clean result — see `committee_no_return` above; never converge on a missing review.</trigger>
+<trigger name="clean">A COMPLETED review (the iter-2+ `/committee` aggregate, or iter-1's reviewer set) returned zero blocking findings this iteration — under the `default` gate that means zero verified Critical+Important; under the `soundness` gate it means zero SOUNDNESS-BLOCKING findings (a round whose verified findings were ALL classified POLISH and backlogged is SOUNDNESS-CONVERGED — the polish backlog may be non-empty; the end-pass is the confirming round, except when its skip-check finds two consecutive zero-apply iterations — the target was already soundness-quiet twice, so a confirming round adds nothing). Write `.committee-loop-CONVERGED.txt` only in the soundness case, stating SOUNDNESS-CONVERGED per the Terminal reports section. A `/committee` that did not return is NOT a clean result — see `committee_no_return` above; never converge on a missing review.</trigger>
 
 <trigger name="reversal">A new iteration's fixes would REVERSE any prior-iteration change. Write `.committee-loop-CONVERGED.txt` naming the oscillator.</trigger>
 
 <trigger name="re-flag-only">This iteration only re-flags findings already ledgered as rejected. Write `.committee-loop-CONVERGED.txt` naming the re-flag(s).</trigger>
 
-<trigger name="stable-polish">Two consecutive COMPLETED iterations (this one and iter-(N−1)) each returned zero verified Critical findings AND no confirmed technical-correctness Important — every confirmed Important across both iterations was polish-class (spec organization, task structure, naming, wording, cross-references) or an already-ledgered re-flag. Apply the current iteration's verified polish Importants under the normal gates first, then write `.committee-loop-CONVERGED.txt` naming both iterations and the polish-only pattern. What this trigger saves is the open-ended CHAIN of further polish-only iterations: converging here caps the remaining cost at the single end-pass committee round (which the end-pass skip-check will NOT skip, because this iteration just applied findings — that round is the intentionally-retained safety net), instead of running a fresh full iteration for the next batch of one-clause polish. Classification rule: an Important is TECHNICAL if applying it would change the described system's behavior, resource bounds, failure modes, interfaces, or security posture; it is POLISH if it only restructures, renames, re-words, or re-references document/task content. When unsure, classify it TECHNICAL — this trigger must never fire on a disguised technical defect.</trigger>
+<trigger name="stable-polish">**Default gate only** (under the `soundness` gate the class gate already makes polish non-blocking, so the clean trigger fires first and this trigger is redundant). Two consecutive COMPLETED iterations (this one and iter-(N−1)) each returned zero verified Critical findings AND no confirmed technical-correctness Important — every confirmed Important across both iterations was polish-class (spec organization, task structure, naming, wording, cross-references) or an already-ledgered re-flag. Apply the current iteration's verified polish Importants under the normal gates first, then write `.committee-loop-CONVERGED.txt` naming both iterations and the polish-only pattern. What this trigger saves is the open-ended CHAIN of further polish-only iterations: converging here caps the remaining cost at the single end-pass committee round (which the end-pass skip-check will NOT skip, because this iteration just applied findings — that round is the intentionally-retained safety net), instead of running a fresh full iteration for the next batch of one-clause polish. Classification rule: an Important is TECHNICAL if applying it would change the described system's behavior, resource bounds, failure modes, interfaces, or security posture; it is POLISH if it only restructures, renames, re-words, or re-references document/task content. When unsure, classify it TECHNICAL — this trigger must never fire on a disguised technical defect.</trigger>
 </convergence_exit>
 
 ## End-pass (runs AT MOST ONCE per session)
@@ -218,7 +271,7 @@ This is the "end" half of the "simplify at beginning and end" design. Simplify p
 Use `.committee-loop-FINAL-PASS-DONE` as a single-shot flag. If it exists, skip to step 5.
 
 <skip_check>
-**Step 0. Skip-check (runs first).** Count `**Decision:** applied` entries in `.committee-loop-decisions.md` for EACH of the two most recent iterations (match the exact ledger format — the entries are written as `- **Decision:** applied`, so a search for the unbolded `Decision: applied` finds nothing and would wrongly count zero) (use the iteration headers in the ledger to delimit sections). If BOTH counts are zero, the codebase has stabilized — the final pass's safety-net value no longer justifies its wall-time cost. Skip steps 1–2 and jump to step 3.
+**Step 0. Skip-check (runs first).** Count `**Decision:** applied` entries in `.committee-loop-decisions.md` for EACH of the two most recent iterations (match the exact ledger format — the entries are written as `- **Decision:** applied`, so a search for the unbolded `Decision: applied` finds nothing and would wrongly count zero) (use the iteration headers in the ledger to delimit sections; `backlogged (polish)` entries intentionally do NOT count — two consecutive polish-only rounds mean the target is soundness-quiet and the extra committee round buys nothing). If BOTH counts are zero, the codebase has stabilized — the final pass's safety-net value no longer justifies its wall-time cost. Skip steps 1–2 and jump to step 3.
 
 If only the current iteration had zero applies but iter-(N−1) had ≥1, run the full pass below — the safety net is still warranted.
 </skip_check>
@@ -230,3 +283,13 @@ If only the current iteration had zero applies but iter-(N−1) had ≥1, run th
 5. If `.committee-loop-BLOCKED.txt` now exists → STOP, do NOT emit the promise. Otherwise emit `<promise>REVIEW CLEAN</promise>`.
 
 The final pass is a safety net, not a regular iteration. Whatever it applies or rejects is trusted on the same gates as any other iteration, and the session ends after step 5 regardless of what the final pass surfaces. The ledger captures all findings for post-mortem inspection.
+
+## Terminal reports (CONVERGED.txt / EXHAUSTED.txt content)
+
+Whenever you write `.committee-loop-CONVERGED.txt` or `.committee-loop-EXHAUSTED.txt`, include:
+
+- **Gate mode** (`soundness` or `default`) and, per round, the count of blocking findings applied (under the soundness gate: soundness-blocking counts — the per-round trajectory is the convergence evidence).
+- **Polish backlog status**: entry count in `.committee-loop-POLISH.md` and a pointer to it (a non-empty backlog at convergence is expected and correct under the soundness gate).
+- **Hot areas** (see `<hot_areas>`): any area that resisted repeated fixes, with the explicit recommendation to prototype/test it rather than keep reviewing prose.
+- **The honest bar** — under the soundness gate, state verbatim that the terminal state means **SOUNDNESS CLEAN: reviewers stopped finding defects that would make a competent implementer build something incorrect, insecure, or non-functional. This is best-effort adversarial review, NOT a correctness proof.** A spec becomes truly verifiable only once it has an executable oracle — when soundness returns diminish (or a hot area persists), the right next step is to IMPLEMENT with the spec's acceptance criteria as the test outline, not to run more review rounds.
+- **Qualified convergence:** if the END-PASS itself applied a soundness Critical, say so and note that convergence is qualified — recommend one follow-up round or moving to implementation.

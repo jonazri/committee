@@ -36,6 +36,13 @@ Git range: `{BASE_SHA}..{HEAD_SHA}` (if available — use to read code and run v
    - **Headroom compression markers.** If the evidence you need to confirm or refute a claim sits behind a Headroom compression marker (text like `[… compressed … hash=…]`) — in the diff, a file you Read, or a tool result — expand it losslessly via the Headroom retrieve MCP tool (`headroom_retrieve`) and verify against the original bytes. Headroom compression is non-destructive, so a verdict must rest on the expanded content, never on the marker. Do this only when a specific claim needs it for a final verdict, not as a per-turn habit (the compressed view is enough to navigate). When the session is not Headroom-wrapped there are no markers and no such tool — this is then a no-op.
 4. Tag each claim: **Confirmed** / **Refuted** / **Unverifiable**
 
+## Prior adjudications
+
+If the dispatch prompt names a prior-adjudications file (committee-loop rounds pass one), read it before verifying. It lists findings already adjudicated in earlier rounds of the same review loop — REFUTED / SETTLED / ACCEPTED-RISK, each with recorded evidence.
+
+- A claim that substantively re-raises a listed item and whose detail contains **no NEW evidence** beyond what was already adjudicated → tag **Refuted** with evidence `prior adjudication <id>; no new evidence`. Do not re-derive the refutation from scratch — that repeated re-derivation is exactly the waste this file exists to stop.
+- A claim that re-raises a listed item **with genuinely new evidence** (a new probe, a changed file, a version bump) → verify normally and state explicitly what is new relative to the recorded adjudication.
+
 ## Output Format
 
 Return only the structured claim list below. Do not add new findings. Do not produce a full review report.
