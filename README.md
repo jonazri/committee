@@ -98,15 +98,15 @@ Before each run, Committee presents a trust dialog:
 
 ## Committee Loop
 
-Companion skill `/committee-loop` (v1.0) runs iterative review-and-refine cycles. Where `/committee` produces a single report for you to act on, `/committee-loop` spawns a detached Claude Code session in an isolated git worktree that:
+Companion skill `/committee-loop` (v1.1) runs iterative review-and-refine cycles. Where `/committee` produces a single report for you to act on, `/committee-loop` spawns a detached Claude Code session in an isolated git worktree that:
 
 1. Runs a `simplify` pre-pass to catch obvious code-quality issues
 2. **Iteration 1 — fast mode:** dispatches Claude + Kiro + Codex in parallel (skipping Gemini); Codex runs at `high` reasoning effort (~3–5 min)
 3. **Iteration 2+ — full mode:** uses `/committee` (all 5 reviewers, including both Gemini models) for thorough verification
 4. Per reviewer, dispatches a parallel verifier subagent that runs concrete bash probes to confirm each claim before any fix is applied
 5. Applies only Critical+Important findings that pass a quorum gate (≥2 reviewers OR single reviewer + passing verification probe); rejects unverifiable claims; defers minors to a sidecar
-6. Maintains a persistent `.committee-loop-decisions.md` ledger with verification commands and rationale for every decision — prevents thrashing because prior rejections can't be re-opened without new evidence
-7. Exits when zero Critical+Important findings remain, or when a fix would reverse a prior iteration (convergence detection), and copies the reviewed file back to origin with a commit
+6. Maintains a persistent `.committee-loop-decisions.md` ledger with verification commands and rationale for every decision — prevents thrashing because prior rejections can't be re-opened without new evidence — and feeds each round's REFUTED/SETTLED record back to every reviewer and verifier so settled items aren't re-litigated
+7. Exits when zero blocking findings remain — under the default gate that's zero Critical+Important; for spec/plan/doc targets a **soundness gate** (auto-selected, or `--gate soundness`) blocks only on findings that would make an implementer build something incorrect/insecure/non-functional and routes documentation polish to a non-blocking `polish.md` backlog, so large prose targets converge (**SOUNDNESS CLEAN**) instead of exhausting the iteration budget — or when a fix would reverse a prior iteration (convergence detection), and copies the reviewed file back to origin with a commit
 
 Invocation:
 ```

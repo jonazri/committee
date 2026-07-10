@@ -57,7 +57,7 @@ fi
 # ---- Preflight: args, targets, tools, skills, git identity ----
 
 [ "$#" -gt 0 ] || {
-  echo "usage: $(basename -- "$0") [--models '<json>'] <target-file> [<target-file> ...]" >&2
+  echo "usage: $(basename -- "$0") [--models '<json>'] [--gate soundness|default] <target-file> [<target-file> ...]" >&2
   echo "       paths must be repo-relative (resolved against origin's repo root)" >&2
   exit 1
 }
@@ -82,12 +82,18 @@ esac
 # here; the JSON itself is written into the worktree as `.committee-loop-models.json` after the
 # worktree exists, for the inner agent to read each iteration.
 MODELS_JSON=""
+# Optional severity-gate mode: `--gate soundness|default`. Written into the worktree as
+# `.committee-loop-gate.txt` for the inner agent's <gate_mode> resolution. Absent = auto
+# (the inner agent picks soundness for all-doc targets, default otherwise).
+GATE_MODE=""
 INNER_LAUNCH_EXTRA="--effort high"   # default; --effort high is the loop-agent sweet spot
 declare -a POSITIONAL=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --models) MODELS_JSON="${2-}"; shift 2 || { echo "--models requires a JSON argument" >&2; exit 1; } ;;
     --models=*) MODELS_JSON="${1#--models=}"; shift ;;
+    --gate) GATE_MODE="${2-}"; shift 2 || { echo "--gate requires a value (soundness|default)" >&2; exit 1; } ;;
+    --gate=*) GATE_MODE="${1#--gate=}"; shift ;;
     --) shift; while [ "$#" -gt 0 ]; do POSITIONAL+=( "$1" ); shift; done ;;
     -*) echo "unknown option: $1" >&2; exit 1 ;;
     *) POSITIONAL+=( "$1" ); shift ;;
@@ -95,10 +101,15 @@ while [ "$#" -gt 0 ]; do
 done
 set -- "${POSITIONAL[@]}"
 [ "$#" -gt 0 ] || {
-  echo "usage: $(basename -- "$0") [--models '<json>'] <target-file> [<target-file> ...]" >&2
+  echo "usage: $(basename -- "$0") [--models '<json>'] [--gate soundness|default] <target-file> [<target-file> ...]" >&2
   echo "       no target file paths given (after option parsing)" >&2
   exit 1
 }
+
+case "$GATE_MODE" in
+  ""|soundness|default) ;;
+  *) echo "invalid --gate: $GATE_MODE (expected soundness or default)" >&2; exit 1 ;;
+esac
 
 if [ -n "$MODELS_JSON" ]; then
   # node is a hard transitive dep (the codex CLI is a node package; agy and kiro-cli are
@@ -121,7 +132,9 @@ if [ -n "$MODELS_JSON" ]; then
     const ia = cfg.innerAgent || {}; chk(ia.model, "innerAgent.model"); chkEff(ia.effort, "innerAgent.effort");
     const rv = cfg.reviewers || {};
     if (typeof rv !== "object" || Array.isArray(rv)) { console.error("reviewers must be a JSON object"); process.exit(1) }
-    const known = ["claude","codex","kiro","gemini","gemini-pro"];
+    // `fable` is the opt-in 6th reviewer (enabled:false-by-absence, unlike the five defaults);
+    // the inner agent maps reviewers.fable.{enabled,model} onto /committee --reviewers/--fable-model.
+    const known = ["claude","codex","kiro","gemini","gemini-pro","fable"];
     for (const [k, s0] of Object.entries(rv)) {
       if (!known.includes(k.toLowerCase())) { console.error("unknown reviewer key: " + k + " (expected one of " + known.join(", ") + ")"); process.exit(1) }
       // NOTE: reviewers.claude.model is validated here but reaches the workflow INDIRECTLY —
@@ -225,7 +238,7 @@ git config user.name >/dev/null && git config user.email >/dev/null \
   || { echo "git user.name/user.email not configured; committee-loop needs both for worktree + copy-back commits" >&2; exit 1; }
 
 # Body files must exist before we try to cat them into the generated scripts.
-for required in inner-agent.md post-body.sh watcher-body.sh health-check-body.sh; do
+for required in inner-agent.md post-body.sh watcher-body.sh health-check-body.sh soundness-gate.md; do
   [ -f "$SCRIPT_DIR/$required" ] \
     || { echo "committee-loop skill corrupt: $SCRIPT_DIR/$required missing" >&2; exit 1; }
 done
@@ -300,6 +313,14 @@ INSTRUCTIONS="$WORKTREE_PATH/.committee-loop-instructions.md"
 # launch model/effort were already derived from it into INNER_LAUNCH_EXTRA.
 if [ -n "$MODELS_JSON" ]; then
   printf '%s\n' "$MODELS_JSON" > "$WORKTREE_PATH/.committee-loop-models.json"
+fi
+
+# Severity-gate config: the classification rubric ships with the skill and is ALWAYS copied
+# (auto mode may need it even without --gate); the explicit mode, if given, is pinned in
+# .committee-loop-gate.txt for the inner agent's <gate_mode> resolution.
+cp "$SCRIPT_DIR/soundness-gate.md" "$WORKTREE_PATH/.committee-loop-SOUNDNESS-GATE.md"
+if [ -n "$GATE_MODE" ]; then
+  printf '%s\n' "$GATE_MODE" > "$WORKTREE_PATH/.committee-loop-gate.txt"
 fi
 
 RALPH_PROMPT="Read .committee-loop-instructions.md and follow it exactly. Review the target files named in that file using the phase-based workflow described, then iterate per the instructions until you emit the REVIEW CLEAN promise."

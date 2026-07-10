@@ -397,6 +397,7 @@ fi
 # place.
 [ -f .committee-loop-decisions.md ] && cp .committee-loop-decisions.md "$ART_DIR/decisions.md"
 [ -f .committee-loop-DEFERRED.md ]  && cp .committee-loop-DEFERRED.md  "$ART_DIR/deferred.md"
+[ -f .committee-loop-POLISH.md ]    && cp .committee-loop-POLISH.md    "$ART_DIR/polish.md"
 [ -f .committee-loop-CONVERGED.txt ] && cp .committee-loop-CONVERGED.txt "$ART_DIR/CONVERGED.txt"
 # DONE records origin HEAD as the completion marker — NOT a guarantee that this
 # run added a commit. When every target was gitignored+untracked (COMMITTABLE

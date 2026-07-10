@@ -79,16 +79,21 @@ If the user's request specifies model choices for this run — e.g. *"only use o
     "codex":      { "model": "gpt-5.5", "effort": "xhigh" },
     "kiro":       { "enabled": false },
     "gemini":     { "model": "gemini-3.5-flash" },
-    "gemini-pro": { "model": "gemini-3.1-pro-low" }
+    "gemini-pro": { "model": "gemini-3.1-pro-low" },
+    "fable":      { "enabled": true, "model": "fable" }
   },
   "verifier": { "model": "sonnet" }
 }
 ```
 
-Honest capability limits to respect when translating: **effort** is only honorable for `innerAgent.effort` (the orchestrator's `--effort`) and `reviewers.codex.effort` (`model_reasoning_effort`); the in-workflow Claude reviewer, verifiers, and Gemini reviewers expose no per-agent effort knob, so for those set only `model`. `reviewers.claude.policy: "pin"` (the default when a claude model is set) freezes the loop's adaptive iter-3 Sonnet step-down + auto-re-escalation to that model; `"adaptive"` keeps the adaptive logic. Model ids must be `[A-Za-z0-9._-]`; effort levels are lowercase enums (`minimal|low|medium|high|xhigh`); `verifier.model` must be `opus|sonnet|haiku`. `spawn.sh` validates the JSON and fails fast on a bad value. Use `model: "opus"` for "opus 4.8" (the current Opus). If the user gives no model preferences, omit `--models` entirely (committee defaults).
+Honest capability limits to respect when translating: **effort** is only honorable for `innerAgent.effort` (the orchestrator's `--effort`) and `reviewers.codex.effort` (`model_reasoning_effort`); the in-workflow Claude reviewer, verifiers, and Gemini reviewers expose no per-agent effort knob, so for those set only `model`. `fable` is the OPT-IN 6th reviewer (a second Claude-family voice; excluded unless `enabled: true` — e.g. for *"add fable to the panel"* / *"run a 6-reviewer premium panel"*); it joins iter-2+ `/committee` rounds only, and only its `model` is settable. `reviewers.claude.policy: "pin"` (the default when a claude model is set) freezes the loop's adaptive iter-3 Sonnet step-down + auto-re-escalation to that model; `"adaptive"` keeps the adaptive logic. Model ids must be `[A-Za-z0-9._-]`; effort levels are lowercase enums (`minimal|low|medium|high|xhigh`); `verifier.model` must be `opus|sonnet|haiku`. `spawn.sh` validates the JSON and fails fast on a bad value. Use `model: "opus"` for "opus 4.8" (the current Opus). If the user gives no model preferences, omit `--models` entirely (committee defaults).
 </operator_model_overrides>
 
-`spawn.sh` handles preflight (tool checks, skill checks, realpath/git version probes, git identity), creates a sibling-dir worktree + committee-loop branch, seeds the worktree with the current origin bytes (including uncommitted edits), generates `.committee-loop-post.sh` / `.committee-loop-watcher.sh` / `.committee-loop-health-check.sh` / `.committee-loop-instructions.md` / `.committee-loop-prompt.txt` (and `.committee-loop-models.json` when `--models` is given) in the worktree, spawns the detached `tmux` session running `claude --dangerously-skip-permissions --effort high` (the model/effort overridable via `innerAgent` in `--models`), pastes the ralph-loop prompt, and emits a manifest on stdout.
+<gate_selection>
+If the user names a severity-gate preference for the run, pass `--gate <mode>` (before or among the path args): *"soundness gate"*, *"converge on soundness"*, *"block only on real defects"* → `--gate soundness`; *"default gate"*, *"strict gate"*, *"block on every Important"* → `--gate default`. If they say nothing, OMIT the flag — the inner agent auto-selects (every target a doc (`.md`/`.rst`/`.adoc`/`.txt`) → soundness; any code target → default). Under the soundness gate, only findings that would make a competent implementer build something incorrect/insecure/non-functional block convergence; documentation-precision/completeness findings are routed to a non-blocking polish backlog (`polish.md` in the artifacts). This is what lets a large spec/plan CONVERGE instead of exhausting its iteration budget.
+</gate_selection>
+
+`spawn.sh` handles preflight (tool checks, skill checks, realpath/git version probes, git identity), creates a sibling-dir worktree + committee-loop branch, seeds the worktree with the current origin bytes (including uncommitted edits), generates `.committee-loop-post.sh` / `.committee-loop-watcher.sh` / `.committee-loop-health-check.sh` / `.committee-loop-instructions.md` / `.committee-loop-prompt.txt` / `.committee-loop-SOUNDNESS-GATE.md` (and `.committee-loop-models.json` when `--models` is given, `.committee-loop-gate.txt` when `--gate` is given) in the worktree, spawns the detached `tmux` session running `claude --dangerously-skip-permissions --effort high` (the model/effort overridable via `innerAgent` in `--models`), pastes the ralph-loop prompt, and emits a manifest on stdout.
 
 On any failure between worktree creation and the tmux spawn, `spawn.sh`'s trap unwinds the worktree + branch so nothing leaks.
 
@@ -131,7 +136,7 @@ Each call returns a shell ID — save both and include in the user report so the
 
 <watcher_outcomes>
 - `DONE:<sha>` — loop finished clean; commit `<sha>` on origin's branch at spawn time (`ORIGIN_REF` from the manifest; post.sh refuses to copy back if that branch moved).
-- `CONVERGED:<sha>` — finished, but converged to avoid oscillation; see `decisions.md` in the artifact dir.
+- `CONVERGED:<sha>` — finished via a convergence trigger; `CONVERGED.txt` in the artifact dir says which: SOUNDNESS-CONVERGED (soundness gate — zero soundness-blocking findings; the `polish.md` backlog may be non-empty by design) or an oscillation/re-flag stop (default gate). See `decisions.md` for the trail.
 - `BLOCKED:<reason>` — origin target changed during review, target became a symlink, multi-target run partially blocked, or origin's branch moved. Worktree preserved.
 - `EXHAUSTED` — ralph ran out of iterations without emitting the promise; no copy-back, worktree preserved.
 - `TMUX_DIED` — tmux died without writing any sentinel (crashed or killed manually).
@@ -222,7 +227,13 @@ Cancel:   tmux -L committee-loop kill-session -t <SESSION> && git worktree remov
 
 Outcomes (artifacts land under <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/):
 - REVIEW CLEAN                 -> post.sh copies back, commits, writes DONE, tears down.
-- REVIEW CLEAN + CONVERGED.txt -> same as CLEAN, but the sidecar names an oscillating finding; check decisions.md.
+                                   Under the soundness gate (doc targets by default, or --gate soundness) CLEAN means
+                                   SOUNDNESS CLEAN: no remaining findings that would make an implementer build something
+                                   incorrect/insecure/non-functional. Documentation-polish items may remain in polish.md —
+                                   non-blocking BY DESIGN, and the result is best-effort adversarial review, not a
+                                   correctness proof.
+- REVIEW CLEAN + CONVERGED.txt -> same as CLEAN; the sidecar says WHY it converged — SOUNDNESS-CONVERGED (soundness gate;
+                                   polish.md may be non-empty by design) or an oscillating/re-flagged finding (default gate); check decisions.md.
 - .committee-loop-BLOCKED.txt   -> origin target changed/became-a-symlink during review, a multi-target run blocked mid-loop, origin's branch moved, or origin had unrelated staged index changes that would be swept into the review commit.
                                    Vetted writes ARE committed (marked "(PARTIAL)" or "(BRANCH MOVED)") EXCEPT when the block reason is an index conflict (pre-existing OR concurrent unrelated staged changes): those runs leave reviewed bytes in origin's working tree UNCOMMITTED and the user must resolve the conflicting index state before staging/committing manually. Worktree preserved for inspection either way.
 - .committee-loop-EXHAUSTED.txt -> ran out of ralph iterations without emitting the promise; no copy-back, worktree preserved.
@@ -232,7 +243,7 @@ Outcomes (artifacts land under <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/):
 
 When the watcher reports `DONE:<sha>` or `CONVERGED:<sha>`, post.sh has already copied the reviewed target back to the origin branch. If the target was an **implementation plan / spec / design doc**, **proactively offer the two standard finishing steps below and run them on a yes.** This saves the user from typing the requests each time while keeping a confirmation gate — do NOT edit the plan before they approve. Skip step 4 entirely for arbitrary code-diff reviews; for those, step 3's report ends the workflow.
 
-**Present a recommendation, then ask one yes/no.** Read the committee's deferred ledger at `<ORIGIN_GIT_DIR>/committee-loop/<SESSION>/deferred.md` and triage it. Show the user a short summary: which deferred findings are worth implementing — genuine correctness / robustness / plan-completeness gaps (e.g. a prose-only test step that violates the plan's own no-placeholder/TDD standard, brittle parsing, a missing preflight/guard, a hollow test that doesn't exercise the property it claims) — vs. which to leave as notes (line-ref drift of 1–3 lines, verified-correct hardcoded paths, items the loop already fixed mid-run); plus your intent to add verification gates + an execution preamble. Then ask a single yes/no, e.g. *"Apply these N deferred fixes and make the plan fresh-session-ready?"* **Wait for the answer.**
+**Present a recommendation, then ask one yes/no.** Read the committee's deferred ledger at `<ORIGIN_GIT_DIR>/committee-loop/<SESSION>/deferred.md` — and, for soundness-gate runs, the polish backlog at `<ORIGIN_GIT_DIR>/committee-loop/<SESSION>/polish.md` (verified-but-non-blocking documentation findings; triage them the same way) — and triage them. Show the user a short summary: which deferred findings are worth implementing — genuine correctness / robustness / plan-completeness gaps (e.g. a prose-only test step that violates the plan's own no-placeholder/TDD standard, brittle parsing, a missing preflight/guard, a hollow test that doesn't exercise the property it claims) — vs. which to leave as notes (line-ref drift of 1–3 lines, verified-correct hardcoded paths, items the loop already fixed mid-run); plus your intent to add verification gates + an execution preamble. Then ask a single yes/no, e.g. *"Apply these N deferred fixes and make the plan fresh-session-ready?"* **Wait for the answer.**
 
 On **yes**, do both, commit (one focused commit each, scoped to the target file), and report what changed:
 - **4a — apply the agreed deferred findings** to the copied-back target on the origin branch.
