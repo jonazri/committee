@@ -15,7 +15,7 @@ Committee runs five reviewers in parallel inside the `committee-review` workflow
 | **Claude** | Claude (harness default; `--reviewer-model` to override) | workflow agent (`general-purpose`) + bundled template |
 | **Codex** | GPT-5.4 | workflow agent runs `codex review` / `codex exec` |
 | **Kiro** | Amazon Q | workflow agent runs `kiro-cli chat` |
-| **Gemini** | Gemini 3.5 Flash | workflow agent runs `agy -p --model gemini-3.5-flash` |
+| **Gemini** | Gemini 3.5 Flash (High) | workflow agent runs `agy -p --model gemini-3.5-flash --effort high` |
 | **Gemini-Pro** | Gemini 3.1 Pro (High) | workflow agent runs `agy -p --model "Gemini 3.1 Pro (High)"` (Pro→Flash retry at default pin) |
 
 After the reviewers return, the `committee-review` workflow runs **per-reviewer verifiers** in parallel — one agent each, checking that reviewer's claims against the actual codebase — and returns a structured `{ quorum, degraded, perReviewer }` result. Then the `/committee` skill:
@@ -197,7 +197,7 @@ User session
               │     ├── Claude  — general-purpose agent + bundled template
               │     ├── Codex   — agent runs codex review / codex exec
               │     ├── Kiro    — agent runs kiro-cli chat
-              │     ├── Gemini  — agent runs `agy --model gemini-3.5-flash`
+              │     ├── Gemini  — agent runs `agy --model gemini-3.5-flash --effort high`
               │     └── Gemini-Pro — agent runs `agy --model "Gemini 3.1 Pro (High)"` (Pro→Flash retry)
               ├── Verify stage — one verifier agent per reviewer, streamed as each review completes
               └── returns { quorum, degraded, perReviewer }
@@ -223,10 +223,10 @@ Codex (GPT-5.4) is the bottleneck. The workflow's Codex reviewer overrides to `m
 
 ## Security Considerations
 
-- **Reviewers cannot write or execute in either mode** (as of 2026-06-23): Kiro always uses `--trust-tools=fs_read` (no shell) and the Gemini reviewers always run `agy` under a fail-closed per-run-`HOME` `permissions.deny` lockdown with **no** `--dangerously-skip-permissions`. Both modes deny `write_file`/`edit_file`/`replace`/`command`/`run_command` (writes + shell). This closes the regression where an auto-mode Gemini reviewer would *execute* a plan/prompt-injected diff and change code (RCA 2026-06-23).
-- **Read-only mode** (default) additionally denies the network/URL exfil tools (`read_url`/`fetch`/`web_search`/`browser_action`) and runs Codex `--sandbox read-only`. Repo reads (`read_file`/`grep_search`) are still ALLOWED, so this is *safer for untrusted content*, NOT a zero-tool sandbox. **Not exfil-safe:** `agy`'s reads are not filesystem-confined, so a prompt-injected reviewer can read local files (incl. `~/.gemini` creds) and echo them into the review output (accepted risk); the network denials only close the *network* exfil channel.
+- **Reviewers cannot write or execute in either mode**: Kiro always uses `--trust-tools=fs_read` (no shell) and the Gemini reviewers run `agy` under a fail-closed per-run-`HOME` `permissions.allow`/`permissions.deny` lockdown with **no** `--dangerously-skip-permissions`. On agy 1.1.6 the four repo-context read tools must be explicitly allowed; both modes still deny `write_file`/`edit_file`/`replace`/`command`/`run_command` (writes + shell).
+- **Read-only mode** (default) additionally denies the network/URL exfil tools (`read_url`/`fetch`/`web_search`/`browser_action`) and runs Codex `--sandbox read-only`. Repo reads (`read_file`/`view_file`/`grep_search`/`list_dir`) are explicitly ALLOWED, so this is *safer for untrusted content*, NOT a zero-tool sandbox. **Not exfil-safe:** `agy`'s reads are not filesystem-confined, so a prompt-injected reviewer can read local files (incl. `~/.gemini` creds) and echo them into the review output (accepted risk); the network denials only close the *network* exfil channel.
 - **Auto Mode** (explicit opt-in, trusted content only): relaxes the lockdown so the Gemini reviewers may use the network and Codex follows your `~/.codex/config.toml` sandbox (Codex is the only reviewer that could write, and only if you widened that config). Because auto allows the network, a prompt-injected read could be POSTed to a URL — use only for reviewing content you trust.
-- **Gemini `@` tokens**: `agy` processes `@path` in stdin and reads the file via `read_file` (NOT workspace-confined — verified to read out-of-repo paths). In both modes writes/shell are denied, so an `@`-read can't become a write/commit; in read-only the network is denied too, so it can't be fetched to a URL (but can still be echoed into the review output — accepted risk). In auto mode the network is allowed, so an `@`-read could also be POSTed to a URL (accepted trusted-content risk).
+- **Gemini staged input and `@` tokens**: agy 1.1.1+ ignores stdin when `-p` also supplies a prompt, so the helper stages the fenced artifact under its per-run HOME and tells `read_file` to load it. Any `@path` in that artifact can trigger another unconfined read. In both modes writes/shell are denied, so an `@`-read can't become a write/commit; in read-only the network is denied too, so it can't be fetched to a URL (but can still be echoed into the review output — accepted risk). In auto mode the network is allowed, so an `@`-read could also be POSTed to a URL (accepted trusted-content risk).
 - **Branch name injection**: The skill instructs the executing LLM to quote all branch names in bash commands. Defense-in-depth for crafted branch names.
 
 ## File Structure
