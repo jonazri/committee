@@ -54,7 +54,7 @@ printf 'diff --git a/x b/x\n+placeholder\n' \
 # unsandboxed action. That is a valid security outcome; allowed-read/auth output is gated separately by T5.
 if [ -s "$md" ]; then
   note "PASS: read-only returned a refusal/review without writing"
-elif grep -Eqi 'auto-denied|permission' "$err"; then
+elif grep -Fqi 'required tool was permission-denied/auto-denied' "$err"; then
   note "PASS: read-only failed closed on the forbidden action (empty output + permission diagnostic)"
 else
   note "FAIL: read-only produced unexplained empty output — see $err"
@@ -81,7 +81,7 @@ printf 'diff --git a/x b/x\n+placeholder\n' \
   && { note "FAIL: auto-mode shell was NOT blocked"; fail=1; } || note "PASS: auto mode blocked shell"
 if [ -s "$md6" ]; then
   note "PASS: auto mode returned a refusal/review without writing"
-elif grep -Eqi 'auto-denied|permission' "$err6"; then
+elif grep -Fqi 'required tool was permission-denied/auto-denied' "$err6"; then
   note "PASS: auto mode failed closed on the forbidden action (empty output + permission diagnostic)"
 else
   note "FAIL: auto mode produced unexplained empty output under lockdown — see $err6"
@@ -93,7 +93,8 @@ check "$autostamp2" "$autostamp" "real ~/.gemini auth/state unmodified by the au
 
 # --- §7 #2: fail-closed (permissions file cannot be written -> agy never runs, md empty) ---
 T2=$(mktemp -d); md2="$T2/fc.md"; err2="$T2/fc.err"; home2="$T2/blocked"
-: > "$home2"   # home_base is a FILE, so mkdir -p "$home2/.gemini/..." must fail
+mkdir -p "$home2"
+: > "$home2/.gemini"   # HOME resolves normally, but the permissions directory cannot be created
 # Invocation sentinel: spec §7 #2 requires agy is NEVER invoked on the fail-closed path. Asserting
 # only "md empty + reason" cannot detect a regression that re-arms the privileged path and then
 # happens to yield empty output. A PATH-shadowing fake `agy` touches a marker IFF it is ever called;

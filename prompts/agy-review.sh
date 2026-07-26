@@ -176,7 +176,7 @@ elif [ ! -s "$out_md" ]; then
   if grep -Eqi 'auto-denied|permission' "$out_err"; then
     echo "agy exited 0 but produced empty output — a required tool was permission-denied/auto-denied; check permissions.allow/deny compatibility" >> "$out_err"
   else
-    echo "agy exited 0 but produced empty output — no review (auth/quota/capacity, or a permission/setup skip)" >> "$out_err"
+    echo "agy exited 0 but produced empty output — no review (auth/quota/capacity, or another setup skip)" >> "$out_err"
   fi
 fi
 exit 0
