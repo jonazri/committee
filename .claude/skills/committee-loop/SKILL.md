@@ -97,10 +97,29 @@ If the user names a severity-gate preference for the run, pass `--gate <mode>` (
 
 On any failure between worktree creation and the tmux spawn, `spawn.sh`'s trap unwinds the worktree + branch so nothing leaks.
 
+<admission_and_bounds>
+`spawn.sh` admits at most `COMMITTEE_MAX_JOBS` concurrent committee-loop jobs per tmux socket (live `committee-loop-*` sessions plus in-flight spawns). **Exit code 75** means the job was rejected before anything was created; stderr says `admission rejected — <n>/<cap> committee jobs already running (<sessions>)`. Relay that line to the user verbatim and stop — do NOT retry in a loop, and do not raise the cap unless the user asks.
+
+Each admitted job runs inside its own transient unit `committee-job-<job id>.scope` (`systemd-run --user --scope`, `OOMPolicy=kill`), where `<job id>` is `SESSION` minus the `committee-loop-` prefix. A job that exceeds its `MemoryMax` is OOM-killed as a unit; siblings are untouched and the watcher reports `TMUX_DIED` with the worktree preserved. Inspect with `systemctl --user status <JOB_UNIT>` or `journalctl --user | grep <JOB_UNIT>` (the transient unit is collected after it exits). Where `systemd-run --user --scope` is unusable (macOS, no user bus), the job runs unbounded with a `WARNING — job runs UNBOUNDED` line on stderr.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `COMMITTEE_MAX_JOBS` | `2` | Concurrent jobs per socket |
+| `COMMITTEE_JOB_BOUNDS` | `auto` | `auto` (bound when available) or `off` |
+| `COMMITTEE_JOB_MEMORY_MAX` | `4G` | `MemoryMax` per job |
+| `COMMITTEE_JOB_MEMORY_SWAP_MAX` | `1G` | `MemorySwapMax` per job |
+| `COMMITTEE_JOB_MEMORY_HIGH` | `infinity` | `MemoryHigh` per job; a value near `MemoryMax` can throttle a runaway indefinitely instead of letting it be killed |
+| `COMMITTEE_JOB_CPU_QUOTA` | `200%` | `CPUQuota` per job |
+| `COMMITTEE_JOB_TASKS_MAX` | `2048` | `TasksMax` per job |
+| `COMMITTEE_LOOP_SOCKET` | `committee-loop` | tmux socket (tests use a private one) |
+
+Invalid values fail `spawn.sh` before any worktree is created.
+</admission_and_bounds>
+
 **Do NOT use the `using-git-worktrees` skill** — it's interactive and runs test baselines we don't need here.
 
 <manifest_format>
-The manifest is a newline-separated, %q-escaped list of `KEY=VALUE` pairs. Parse by reading the last `head` lines of stdout (or the file `$WORKTREE_PATH/.committee-loop-manifest.txt`) and extracting these keys: `SESSION`, `WORKTREE_PATH`, `BRANCH`, `ORIGIN_PATH`, `ORIGIN_REF`, `ORIGIN_GIT_DIR`, `WATCHER_SCRIPT`, `HEALTH_CHECK_SCRIPT`, `TARGET_FILES_JOINED`.
+The manifest is a newline-separated, %q-escaped list of `KEY=VALUE` pairs. Parse by reading the last `head` lines of stdout (or the file `$WORKTREE_PATH/.committee-loop-manifest.txt`) and extracting these keys: `SESSION`, `WORKTREE_PATH`, `BRANCH`, `ORIGIN_PATH`, `ORIGIN_REF`, `ORIGIN_GIT_DIR`, `WATCHER_SCRIPT`, `HEALTH_CHECK_SCRIPT`, `TARGET_FILES_JOINED`, `JOB_UNIT` (the job's `committee-job-<job id>.scope`; empty when unbounded).
 </manifest_format>
 
 ### 2. Install the status watcher AND the 4.5m health check
