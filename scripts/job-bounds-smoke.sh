@@ -91,6 +91,7 @@ spawn third.md "$TMP/c2.manifest"; check "$?" 75 "rejection is deterministic on 
 
 # --- AC4: per-job attribution ---
 check "$A_UNIT" "committee-job-${A_SESSION#committee-loop-}.scope" "job A unit name carries its job id"
+check "$(mval "$TMP/a.manifest" COMMITTEE_SOCKET)" "$SOCK" "manifest records the tmux socket"
 check "$B_UNIT" "committee-job-${B_SESSION#committee-loop-}.scope" "job B unit name carries its job id"
 systemctl --user is-active --quiet "$A_UNIT"; check "$?" 0 "job A scope active"
 systemctl --user is-active --quiet "$B_UNIT"; check "$?" 0 "job B scope active"

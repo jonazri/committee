@@ -119,7 +119,7 @@ Invalid values fail `spawn.sh` before any worktree is created.
 **Do NOT use the `using-git-worktrees` skill** — it's interactive and runs test baselines we don't need here.
 
 <manifest_format>
-The manifest is a newline-separated, %q-escaped list of `KEY=VALUE` pairs. Parse by reading the last `head` lines of stdout (or the file `$WORKTREE_PATH/.committee-loop-manifest.txt`) and extracting these keys: `SESSION`, `WORKTREE_PATH`, `BRANCH`, `ORIGIN_PATH`, `ORIGIN_REF`, `ORIGIN_GIT_DIR`, `WATCHER_SCRIPT`, `HEALTH_CHECK_SCRIPT`, `TARGET_FILES_JOINED`, `JOB_UNIT` (the job's `committee-job-<job id>.scope`; empty when unbounded).
+The manifest is a newline-separated, %q-escaped list of `KEY=VALUE` pairs. Parse by reading the last `head` lines of stdout (or the file `$WORKTREE_PATH/.committee-loop-manifest.txt`) and extracting these keys: `SESSION`, `WORKTREE_PATH`, `BRANCH`, `ORIGIN_PATH`, `ORIGIN_REF`, `ORIGIN_GIT_DIR`, `WATCHER_SCRIPT`, `HEALTH_CHECK_SCRIPT`, `TARGET_FILES_JOINED`, `JOB_UNIT` (the job's `committee-job-<job id>.scope`; empty when unbounded), `COMMITTEE_SOCKET` (the tmux socket every `tmux -L` command below must use).
 </manifest_format>
 
 ### 2. Install the status watcher AND the 4.5m health check
@@ -171,9 +171,9 @@ The 4.5m health check and the terminal watcher are NOT sufficient on their own. 
 - **Cadence:** poll roughly every ~4.5 min (270s — keeps the prompt cache warm; do NOT stretch past ~290s — 270s stays under the 300s prompt-cache TTL, and anything longer buys a cold cache on every wakeup) until the watcher fires a terminal outcome. Use the harness's own scheduling (e.g. `ScheduleWakeup`) rather than blocking `sleep`s.
 - **Tick — ONE Bash call** (pane peek + mtime probe + sentinel check together; never split these into separate calls):
   ```bash
-  SESSION="<SESSION>"; WORKTREE_PATH="<WORKTREE_PATH>"; ORIGIN_GIT_DIR="<ORIGIN_GIT_DIR>"  # from the manifest
+  SESSION="<SESSION>"; WORKTREE_PATH="<WORKTREE_PATH>"; ORIGIN_GIT_DIR="<ORIGIN_GIT_DIR>"; COMMITTEE_SOCKET="<COMMITTEE_SOCKET>"  # from the manifest
   ART_DIR="$ORIGIN_GIT_DIR/committee-loop/$SESSION"
-  tmux -L committee-loop capture-pane -t "$SESSION" -p | tail -45
+  tmux -L "$COMMITTEE_SOCKET" capture-pane -t "$SESSION" -p | tail -45
   echo '--- recent worktree writes (empty list + idle prompt = STALLED) ---'
   # ISO timestamp, not '-6 minutes': the harness shims `find` to bfs, which rejects relative -newermt
   find "$WORKTREE_PATH" -type f -not -path '*/.git/*' -newermt "$(date -d '-6 minutes' +%Y-%m-%dT%H:%M:%S)"
@@ -188,9 +188,9 @@ The 4.5m health check and the terminal watcher are NOT sufficient on their own. 
 - **RUNNING** = an active spinner line (`…· esc to interrupt`). Iterations legitimately take ~20–35 min (reviewers + verifiers), so a static tail *with* a spinner is normal — judge by spinner + fs activity, not "looks stuck."
 - **Recover** (a bare `Enter`/`C-m` does NOT submit — the line must be cleared and retyped):
   ```bash
-  tmux -L committee-loop send-keys -t <SESSION> C-u
-  sleep 1; tmux -L committee-loop send-keys -t <SESSION> -l "continue"
-  sleep 1; tmux -L committee-loop send-keys -t <SESSION> Enter
+  tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> C-u
+  sleep 1; tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> -l "continue"
+  sleep 1; tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> Enter
   ```
   Wait ~10s, re-peek, and confirm a spinner appeared.
 - **Exception — the final `Run post.sh?` prompt is a SELECTION MENU, not a text prompt.** There a single `Enter` (selects the highlighted "Yes, run post.sh") is correct — do NOT clear/retype, and do NOT auto-advance it if the user asked to decide on teardown.
@@ -205,15 +205,15 @@ Session limits, 429s, and "throttling" are effectively **fake news** for a commi
 
 ```bash
 # PEEK the menu first — the paid option may be the highlighted default:
-tmux -L committee-loop capture-pane -t <SESSION> -p | tail -45
+tmux -L <COMMITTEE_SOCKET> capture-pane -t <SESSION> -p | tail -45
 # The menu is arrow-navigable. If "Stop and wait for limit to reset" is NOT the
 # highlighted row, move the highlight onto it (arrow keys, or type its number if
 # the menu is numbered) BEFORE selecting.
-tmux -L committee-loop send-keys -t <SESSION> Enter        # selects the HIGHLIGHTED row — it MUST read "Stop and wait for limit to reset"
+tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> Enter        # selects the HIGHLIGHTED row — it MUST read "Stop and wait for limit to reset"
 # Then nudge the now-idle prompt (clear the line first — a bare Enter won't submit):
-sleep 1; tmux -L committee-loop send-keys -t <SESSION> C-u
-sleep 1; tmux -L committee-loop send-keys -t <SESSION> -l "continue"
-sleep 1; tmux -L committee-loop send-keys -t <SESSION> Enter
+sleep 1; tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> C-u
+sleep 1; tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> -l "continue"
+sleep 1; tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> Enter
 ```
 
 Wait ~10s, re-peek, and confirm a spinner appeared. (`resume` works as the nudge word too — the word doesn't matter.)
@@ -239,10 +239,10 @@ Committee loop spawned.
 
 I'll check in roughly every 4.5 minutes (recovering the loop if its auto-continue stalls, or nudging it past any rate-limit/429 dialog — see §2b/§2c) and report again whenever the loop finishes (within ~15s of terminal state).
 
-(committee-loop runs on a private tmux socket for isolation — note the `-L committee-loop`.)
-Monitor:  tmux -L committee-loop attach -t <SESSION>      (Ctrl-b d to detach)
-Peek:     tmux -L committee-loop capture-pane -t <SESSION> -p | tail -40
-Cancel:   tmux -L committee-loop kill-session -t <SESSION> && git worktree remove --force <WORKTREE_PATH> && git branch -D <BRANCH>
+(committee-loop runs on a private tmux socket for isolation — note the `-L <COMMITTEE_SOCKET>`, `committee-loop` unless `COMMITTEE_LOOP_SOCKET` was set.)
+Monitor:  tmux -L <COMMITTEE_SOCKET> attach -t <SESSION>      (Ctrl-b d to detach)
+Peek:     tmux -L <COMMITTEE_SOCKET> capture-pane -t <SESSION> -p | tail -40
+Cancel:   tmux -L <COMMITTEE_SOCKET> kill-session -t <SESSION> && git worktree remove --force <WORKTREE_PATH> && git branch -D <BRANCH>
 
 Outcomes (artifacts land under <ORIGIN_GIT_DIR>/committee-loop/<SESSION>/):
 - REVIEW CLEAN                 -> post.sh copies back, commits, writes DONE, tears down.

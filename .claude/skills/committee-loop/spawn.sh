@@ -546,6 +546,7 @@ MANIFEST="$WORKTREE_PATH/.committee-loop-manifest.txt"
   printf 'HEALTH_CHECK_SCRIPT=%q\n' "$HEALTH_CHECK_SCRIPT"
   printf 'TARGET_FILES_JOINED=%q\n' "$TARGET_JOINED"
   printf 'JOB_UNIT=%q\n' "${CL_JOB_UNIT:+$CL_JOB_UNIT.scope}"
+  printf 'COMMITTEE_SOCKET=%q\n' "$COMMITTEE_SOCKET"
 } > "$MANIFEST"
 # Print to stdout separately (non-pipeline) so a `tee` failure under pipefail
 # can't orphan the live tmux session + watchdog launched above.

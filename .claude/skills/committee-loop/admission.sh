@@ -89,6 +89,39 @@ committee_active_jobs() {
   } | sort -u
 }
 
+committee_have_flock() {
+  command -v flock >/dev/null 2>&1
+}
+
+# Exclusive lock on <dir>: flock where available (Linux), else an atomic mkdir
+# lock whose holder PID lets a crashed holder's lock be broken. fd 9 (not a
+# dynamic `{fd}`) keeps this Bash 3.2 compatible.
+committee_lock() {
+  local dir="$1" i holder
+  if committee_have_flock; then
+    exec 9>"$dir/.lock" || return 1
+    flock -w 30 9 && return 0
+    exec 9>&-; return 1
+  fi
+  for i in $(seq 1 300); do
+    if mkdir "$dir/.lock.d" 2>/dev/null; then
+      printf '%s\n' "$$" > "$dir/.lock.d/pid"; return 0
+    fi
+    holder=$(cat "$dir/.lock.d/pid" 2>/dev/null || true)
+    [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null && rm -rf "$dir/.lock.d"
+    sleep 0.1
+  done
+  return 1
+}
+
+committee_unlock() {
+  if committee_have_flock; then
+    flock -u 9; exec 9>&-
+  else
+    rm -rf "$1/.lock.d"
+  fi
+}
+
 # committee_admit <socket> <session> <spawner-pid>
 # Admits the job (writes a reservation) or rejects it with rc 75 and a message
 # on stderr. The whole count-then-reserve step runs under one exclusive lock.
@@ -96,10 +129,7 @@ committee_admit() {
   local socket="$1" session="$2" pid="$3" dir active count rc
   dir=$(committee_state_dir "$socket")
   (umask 077; mkdir -p -- "$dir") || { echo "committee-loop: cannot create admission dir $dir" >&2; return 1; }
-  command -v flock >/dev/null 2>&1 \
-    || { echo "committee-loop: 'flock' is required for admission control (util-linux)" >&2; return 1; }
-  exec {CL_LOCK_FD}>"$dir/.lock" || return 1
-  flock -w 30 "$CL_LOCK_FD" || { exec {CL_LOCK_FD}>&-; echo "committee-loop: timed out waiting for the admission lock" >&2; return 1; }
+  committee_lock "$dir" || { echo "committee-loop: timed out waiting for the admission lock" >&2; return 1; }
   active=$(committee_active_jobs "$dir")
   count=$(printf '%s' "$active" | grep -c . || true)
   if [ "$count" -ge "$CL_MAX_JOBS" ]; then
@@ -109,7 +139,7 @@ committee_admit() {
     printf '%s\n' "$(committee_pid_token "$pid")" > "$dir/$session" && rc=0 || rc=1
     [ "$rc" = 0 ] && echo "committee-loop: admitted $session ($((count + 1))/$CL_MAX_JOBS)" >&2
   fi
-  flock -u "$CL_LOCK_FD"; exec {CL_LOCK_FD}>&-
+  committee_unlock "$dir"
   return "$rc"
 }
 
@@ -117,12 +147,14 @@ committee_release() {
   rm -f -- "$(committee_state_dir "$1")/$2"
 }
 
-# Succeeds when a bounded transient scope can be created here. Uses fixed,
-# generous caps so a deliberately tight operator cap cannot fail the probe.
+# Succeeds when a transient scope with every property the job prefix sets can
+# be created here. Uses fixed, generous values so a deliberately tight operator
+# cap cannot fail the probe itself.
 committee_probe_bounds() {
   command -v systemd-run >/dev/null 2>&1 || return 1
   timeout 15 systemd-run --user --scope --quiet --collect \
-    -p MemoryMax=256M -p CPUQuota=100% -p TasksMax=64 -p OOMPolicy=kill -- true >/dev/null 2>&1
+    -p MemoryHigh=infinity -p MemoryMax=256M -p MemorySwapMax=256M -p CPUQuota=100% \
+    -p TasksMax=64 -p OOMPolicy=kill -- true >/dev/null 2>&1
 }
 
 # committee_build_bounds_argv <job-id>

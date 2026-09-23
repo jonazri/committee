@@ -103,6 +103,24 @@ admitted=$(cat "$TMP"/rc.* | grep -cx 0); rejected=$(cat "$TMP"/rc.* | grep -cx 
 check "$admitted/$rejected" "3/9" "12 concurrent admissions at cap 3 admit exactly 3"
 rm -f "$TMP"/rc.*
 
+# --- same race without flock (mkdir lock; stock macOS) ---
+reset_env; export COMMITTEE_MAX_JOBS=3; committee_validate_config
+committee_have_flock() { return 1; }
+for i in $(seq 1 12); do
+  ( committee_admit "$SOCK" "committee-loop-mk-$i" "$$" 2>/dev/null; echo "$?" > "$TMP/rc.$i" ) &
+done
+wait
+admitted=$(cat "$TMP"/rc.* | grep -cx 0); rejected=$(cat "$TMP"/rc.* | grep -cx 75)
+check "$admitted/$rejected" "3/9" "mkdir lock: 12 concurrent admissions at cap 3 admit exactly 3"
+check "$([ -e "$DIR/.lock.d" ] && echo held || echo released)" released "mkdir lock released"
+mkdir -p "$DIR/.lock.d"; bash -c 'exit 0' & deadpid=$!; wait "$deadpid"; echo "$deadpid" > "$DIR/.lock.d/pid"
+committee_admit "$SOCK" committee-loop-mk-stale "$$" 2>/dev/null; rc=$?
+check "$rc" 75 "lock left by a dead holder is broken (cap still enforced)"
+rm -f "$TMP"/rc.*
+unset -f committee_have_flock
+# shellcheck source=../.claude/skills/committee-loop/admission.sh
+. "$LIB"
+
 # --- bounds prefix ---
 reset_env; export COMMITTEE_JOB_MEMORY_MAX=128M COMMITTEE_JOB_MEMORY_HIGH=96M COMMITTEE_JOB_MEMORY_SWAP_MAX=0 \
   COMMITTEE_JOB_CPU_QUOTA=50% COMMITTEE_JOB_TASKS_MAX=64
