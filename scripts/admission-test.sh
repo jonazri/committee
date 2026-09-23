@@ -103,20 +103,20 @@ admitted=$(cat "$TMP"/rc.* | grep -cx 0); rejected=$(cat "$TMP"/rc.* | grep -cx 
 check "$admitted/$rejected" "3/9" "12 concurrent admissions at cap 3 admit exactly 3"
 rm -f "$TMP"/rc.*
 
-# --- same race without flock (mkdir lock; stock macOS) ---
+# --- same race without flock (perl lock; stock macOS) ---
 reset_env; export COMMITTEE_MAX_JOBS=3; committee_validate_config
 committee_have_flock() { return 1; }
 for i in $(seq 1 12); do
-  ( committee_admit "$SOCK" "committee-loop-mk-$i" "$$" 2>/dev/null; echo "$?" > "$TMP/rc.$i" ) &
+  ( committee_admit "$SOCK" "committee-loop-pl-$i" "$$" 2>/dev/null; echo "$?" > "$TMP/rc.$i" ) &
 done
 wait
 admitted=$(cat "$TMP"/rc.* | grep -cx 0); rejected=$(cat "$TMP"/rc.* | grep -cx 75)
-check "$admitted/$rejected" "3/9" "mkdir lock: 12 concurrent admissions at cap 3 admit exactly 3"
-check "$([ -e "$DIR/.lock.d" ] && echo held || echo released)" released "mkdir lock released"
-mkdir -p "$DIR/.lock.d"; bash -c 'exit 0' & deadpid=$!; wait "$deadpid"; echo "$deadpid" > "$DIR/.lock.d/pid"
-committee_admit "$SOCK" committee-loop-mk-stale "$$" 2>/dev/null; rc=$?
-check "$rc" 75 "lock left by a dead holder is broken (cap still enforced)"
+check "$admitted/$rejected" "3/9" "perl lock: 12 concurrent admissions at cap 3 admit exactly 3"
 rm -f "$TMP"/rc.*
+reset_env; export COMMITTEE_MAX_JOBS=1; committee_validate_config; mkdir -p "$DIR"
+( committee_lock "$DIR"; sleep 30 ) & holder=$!
+sleep 1; kill -9 "$holder"; wait "$holder" 2>/dev/null
+committee_admit "$SOCK" committee-loop-pl-after "$$" 2>/dev/null; check "$?" 0 "perl lock released when its holder is killed"
 unset -f committee_have_flock
 # shellcheck source=../.claude/skills/committee-loop/admission.sh
 . "$LIB"

@@ -93,33 +93,24 @@ committee_have_flock() {
   command -v flock >/dev/null 2>&1
 }
 
-# Exclusive lock on <dir>: flock where available (Linux), else an atomic mkdir
-# lock whose holder PID lets a crashed holder's lock be broken. fd 9 (not a
-# dynamic `{fd}`) keeps this Bash 3.2 compatible.
+# Exclusive kernel lock on <dir>/.lock via fd 9 (Bash 3.2 compatible): the
+# flock CLI where present, else perl's flock on the same fd (stock macOS). The
+# lock belongs to the open file, so it is released when the holder exits.
 committee_lock() {
-  local dir="$1" i holder
+  exec 9>"$1/.lock" || return 1
   if committee_have_flock; then
-    exec 9>"$dir/.lock" || return 1
     flock -w 30 9 && return 0
-    exec 9>&-; return 1
+  elif command -v perl >/dev/null 2>&1; then
+    perl -MFcntl=:flock -e 'open(my $f, ">&=", 9) or exit 1;
+      for (1 .. 300) { exit 0 if flock($f, LOCK_EX | LOCK_NB); select(undef, undef, undef, 0.1) } exit 1' && return 0
+  else
+    echo "committee-loop: admission control needs 'flock' or 'perl'" >&2
   fi
-  for i in $(seq 1 300); do
-    if mkdir "$dir/.lock.d" 2>/dev/null; then
-      printf '%s\n' "$$" > "$dir/.lock.d/pid"; return 0
-    fi
-    holder=$(cat "$dir/.lock.d/pid" 2>/dev/null || true)
-    [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null && rm -rf "$dir/.lock.d"
-    sleep 0.1
-  done
-  return 1
+  exec 9>&-; return 1
 }
 
 committee_unlock() {
-  if committee_have_flock; then
-    flock -u 9; exec 9>&-
-  else
-    rm -rf "$1/.lock.d"
-  fi
+  exec 9>&-
 }
 
 # committee_admit <socket> <session> <spawner-pid>
@@ -139,7 +130,7 @@ committee_admit() {
     printf '%s\n' "$(committee_pid_token "$pid")" > "$dir/$session" && rc=0 || rc=1
     [ "$rc" = 0 ] && echo "committee-loop: admitted $session ($((count + 1))/$CL_MAX_JOBS)" >&2
   fi
-  committee_unlock "$dir"
+  committee_unlock
   return "$rc"
 }
 
