@@ -115,6 +115,8 @@ Invocation:
 
 Requires `tmux`, `git 2.31+`, `realpath -e` (GNU coreutils), `sha256sum`, and the `ralph-loop` Claude Code plugin. The loop runs unattended — monitor with `tmux attach -t <session>` or walk away.
 
+**Concurrency and memory bounds.** At most `COMMITTEE_MAX_JOBS` (default 2) loops run at once; a spawn beyond the cap exits 75 with a message naming the running jobs, before creating anything. On Linux with a systemd user session each loop runs in its own `committee-job-<job id>.scope` (default `MemoryMax=4G`, `MemorySwapMax=1G`, `CPUQuota=200%`, `TasksMax=2048`, `OOMPolicy=kill`), so a runaway loop is killed alone instead of pushing the host into a global OOM. All values are environment-configurable; see the committee-loop `SKILL.md`. Tests: `scripts/admission-test.sh` (hermetic) and `scripts/job-bounds-smoke.sh` (real scopes, private tmux socket, tiny caps).
+
 ## Recommended Settings
 
 Add these to your project's `.claude/settings.local.json` for smooth operation (avoids permission dialogs):
@@ -234,7 +236,7 @@ Codex (GPT-5.4) is the bottleneck. The workflow's Codex reviewer overrides to `m
 ```
 .claude/skills/
   committee/SKILL.md                 # /committee skill entry point
-  committee-loop/                    # /committee-loop skill (SKILL.md + spawn.sh + inner-agent.md + body scripts)
+  committee-loop/                    # /committee-loop skill (SKILL.md + spawn.sh + admission.sh + inner-agent.md + body scripts)
 prompts/
   committee-review.js                # review workflow (reviewers -> per-reviewer verify -> structured return)
   verifier.md                        # Per-reviewer verifier prompt

@@ -19,6 +19,7 @@ cleanup_on_error() {
   [ -n "${SESSION:-}" ] && tmux kill-session -t "$SESSION" 2>/dev/null || true
   [ -n "${WORKTREE_PATH:-}" ] && git worktree remove --force "$WORKTREE_PATH" 2>/dev/null || true
   [ -n "${BRANCH:-}" ] && git branch -D "$BRANCH" 2>/dev/null || true
+  [ -n "${ADMITTED:-}" ] && committee_release "$COMMITTEE_SOCKET" "$SESSION" || true
   exit "$rc"
 }
 trap 'cleanup_on_error $?' ERR
@@ -238,10 +239,15 @@ git config user.name >/dev/null && git config user.email >/dev/null \
   || { echo "git user.name/user.email not configured; committee-loop needs both for worktree + copy-back commits" >&2; exit 1; }
 
 # Body files must exist before we try to cat them into the generated scripts.
-for required in inner-agent.md post-body.sh watcher-body.sh health-check-body.sh soundness-gate.md; do
+for required in inner-agent.md post-body.sh watcher-body.sh health-check-body.sh soundness-gate.md admission.sh; do
   [ -f "$SCRIPT_DIR/$required" ] \
     || { echo "committee-loop skill corrupt: $SCRIPT_DIR/$required missing" >&2; exit 1; }
 done
+
+# Admission cap + per-job cgroup bounds config (validated before any worktree cost).
+# shellcheck source=admission.sh
+. "$SCRIPT_DIR/admission.sh"
+committee_validate_config || exit 1
 
 # ---- Dedicated tmux socket (isolation + crash avoidance) ----
 # All committee-loop tmux traffic runs on its OWN tmux server (-L), never the
@@ -257,7 +263,7 @@ done
 # The wrapper keeps every `tmux ...` call below on this socket without per-call
 # edits. The generated watcher/post/health-check scripts get the same wrapper via
 # their headers; the detached watchdog (separate process) sets it inline.
-COMMITTEE_SOCKET="committee-loop"
+COMMITTEE_SOCKET="$CL_SOCKET"
 tmux() { command tmux -L "$COMMITTEE_SOCKET" "$@"; }
 
 # ---- Create the worktree ----
@@ -272,6 +278,15 @@ TS="$(date +%Y%m%d-%H%M%S)-$$-$RANDOM"
 WORKTREE_PATH="$(dirname -- "$ORIGIN_PATH")/${PROJECT}-committee-loop-${SLUG}-${TS}"
 BRANCH="committee-loop/${SLUG}-${TS}"
 SESSION="committee-loop-${SLUG}-${TS}"
+
+# ---- Admission control + per-job bounds ----
+
+# Rejected jobs exit 75 here, before any worktree, branch or tmux session exists.
+ADMIT_RC=0
+committee_admit "$COMMITTEE_SOCKET" "$SESSION" "$$" || ADMIT_RC=$?
+[ "$ADMIT_RC" = 0 ] || exit "$ADMIT_RC"
+ADMITTED=1
+committee_build_bounds_argv "${SESSION#committee-loop-}" || cleanup_on_error 1
 
 git worktree add "$WORKTREE_PATH" -b "$BRANCH"
 
@@ -422,6 +437,9 @@ printf '\n%s\n' "$RALPH_INVOCATION" >> "$PROMPT_FILE"
 # build_inner_launch (top of file) routes this through cclaude/Headroom when available.
 INNER_LAUNCH=$(build_inner_launch "--dangerously-skip-permissions $INNER_LAUNCH_EXTRA")
 case "$INNER_LAUNCH" in "cclaude "*|"headroom wrap "*) INNER_WRAPPED=1 ;; *) INNER_WRAPPED=0 ;; esac
+# The whole inner process tree runs in its own transient scope (CL_JOB_UNIT), so a
+# runaway job is OOM-killed as a unit without touching sibling jobs.
+INNER_LAUNCH="${CL_BOUNDS_PREFIX:+$CL_BOUNDS_PREFIX }$INNER_LAUNCH"
 tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$WORKTREE_PATH" \
   "$INNER_LAUNCH"
 
@@ -455,6 +473,7 @@ if ! $READY; then
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   git worktree remove --force "$WORKTREE_PATH" || true
   git branch -D "$BRANCH" || true
+  committee_release "$COMMITTEE_SOCKET" "$SESSION"
   exit 1
 fi
 
@@ -526,7 +545,11 @@ MANIFEST="$WORKTREE_PATH/.committee-loop-manifest.txt"
   printf 'WATCHER_SCRIPT=%q\n' "$WATCHER_SCRIPT"
   printf 'HEALTH_CHECK_SCRIPT=%q\n' "$HEALTH_CHECK_SCRIPT"
   printf 'TARGET_FILES_JOINED=%q\n' "$TARGET_JOINED"
+  printf 'JOB_UNIT=%q\n' "${CL_JOB_UNIT:+$CL_JOB_UNIT.scope}"
+  printf 'COMMITTEE_SOCKET=%q\n' "$COMMITTEE_SOCKET"
 } > "$MANIFEST"
 # Print to stdout separately (non-pipeline) so a `tee` failure under pipefail
 # can't orphan the live tmux session + watchdog launched above.
 cat "$MANIFEST"
+# The live tmux session now holds this job's admission slot.
+committee_release "$COMMITTEE_SOCKET" "$SESSION"
