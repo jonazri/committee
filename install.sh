@@ -9,6 +9,18 @@ set -euo pipefail
 #
 # Re-running is safe — symlinks are overwritten in place (ln -sfn).
 # Uninstall: rm -rf ~/.claude/skills/committee ~/.claude/skills/committee-loop ~/.claude/workflows/committee-review.js
+#   (and remove the committee-loop spawn.sh rule from permissions.allow in ~/.claude/settings.json)
+#
+# Options:
+#   --no-permission-rule   don't add the committee-loop spawn allow rule to ~/.claude/settings.json
+
+ADD_PERMISSION_RULE=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-permission-rule) ADD_PERMISSION_RULE=0 ;;
+    *) echo "install.sh: unknown option: $arg" >&2; exit 1 ;;
+  esac
+done
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_DIR="$HOME/.claude/skills"
@@ -22,8 +34,11 @@ SKILLS_DIR="$HOME/.claude/skills"
 _gd=$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir 2>/dev/null || true)
 _gcd=$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null || true)
 if [ -n "$_gd" ] && [ -n "$_gcd" ]; then
+  # Normalize BOTH through `pwd -P`: on Git Bash, --absolute-git-dir prints C:/... while
+  # pwd prints /c/..., so comparing a raw git path against a pwd path always "differs".
+  _gd=$(cd -- "$_gd" 2>/dev/null && pwd -P || true)
   _gcd=$(cd -- "$REPO_ROOT" 2>/dev/null && cd -- "$_gcd" 2>/dev/null && pwd -P || true)
-  if [ -n "$_gcd" ] && [ "$_gd" != "$_gcd" ]; then
+  if [ -n "$_gd" ] && [ -n "$_gcd" ] && [ "$_gd" != "$_gcd" ]; then
     echo "install.sh: refusing to run from a linked git worktree:" >&2
     echo "  $REPO_ROOT" >&2
     echo "  Installing from a worktree repoints your global ~/.claude symlinks at a directory" >&2
@@ -65,6 +80,36 @@ safe_symlink "$REPO_ROOT/prompts/committee-review.js" "$HOME/.claude/workflows/c
 
 # /committee-loop — same pattern; spawn.sh is resolved via readlink -f on SKILL.md
 safe_symlink "$REPO_ROOT/.claude/skills/committee-loop/SKILL.md" "$SKILLS_DIR/committee-loop/SKILL.md"
+
+# Allow rule for the committee-loop spawn. spawn.sh launches a detached
+# `claude --dangerously-skip-permissions` session, which Claude Code's auto-mode
+# classifier blocks unless the exact command is allow-listed. SKILL.md invokes
+# `bash <real skill dir>/spawn.sh ...` with the literal readlink -f path, so the rule
+# uses the physical (pwd -P) path. Stale rules for an older clone location are replaced.
+if [ "$ADD_PERMISSION_RULE" = 1 ]; then
+  SPAWN_RULE="Bash(bash $(cd -- "$REPO_ROOT" && pwd -P)/.claude/skills/committee-loop/spawn.sh:*)"
+  if ! command -v node >/dev/null 2>&1; then
+    echo "WARNING: node not found — add this to permissions.allow in ~/.claude/settings.json yourself:" >&2
+    echo "  \"$SPAWN_RULE\"" >&2
+  elif ! SETTINGS="$HOME/.claude/settings.json" SPAWN_RULE="$SPAWN_RULE" node -e '
+      const fs = require("fs");
+      const p = process.env.SETTINGS, rule = process.env.SPAWN_RULE;
+      const text = fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "";
+      const s = text.trim() ? JSON.parse(text) : {};
+      s.permissions = s.permissions || {};
+      const allow = Array.isArray(s.permissions.allow) ? s.permissions.allow : [];
+      const stale = /^Bash\(bash .*\/\.claude\/skills\/committee-loop\/spawn\.sh:\*\)$/;
+      const next = allow.filter(r => r === rule || !stale.test(r));
+      if (!next.includes(rule)) next.push(rule);
+      if (JSON.stringify(next) === JSON.stringify(allow)) process.exit(0);
+      s.permissions.allow = next;
+      fs.writeFileSync(p, JSON.stringify(s, null, 2) + "\n");
+      console.log("Added permission rule to " + p + ": " + rule);
+    '; then
+    echo "WARNING: could not update ~/.claude/settings.json — add this to permissions.allow yourself:" >&2
+    echo "  \"$SPAWN_RULE\"" >&2
+  fi
+fi
 
 echo "Installed committee + committee-loop to $SKILLS_DIR"
 echo "  source: $REPO_ROOT"

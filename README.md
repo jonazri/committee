@@ -50,9 +50,13 @@ The Claude reviewer runs as the built-in `general-purpose` agent using committee
 git clone https://github.com/jonazri/committee.git && cd committee && ./install.sh
 ```
 
-`install.sh` symlinks the `committee` and `committee-loop` skills into `~/.claude/skills/` (and the `committee-review` workflow into `~/.claude/workflows/`), so `/committee` and `/committee-loop` are available in every Claude Code session. Re-running is safe; uninstall with `rm -rf ~/.claude/skills/committee ~/.claude/skills/committee-loop ~/.claude/workflows/committee-review.js`.
+`install.sh` symlinks the `committee` and `committee-loop` skills into `~/.claude/skills/` (and the `committee-review` workflow into `~/.claude/workflows/`), so `/committee` and `/committee-loop` are available in every Claude Code session. It also adds an allow rule for the committee-loop spawn command (`Bash(bash <clone>/.claude/skills/committee-loop/spawn.sh:*)`) to `permissions.allow` in `~/.claude/settings.json` — without it, Claude Code's auto mode blocks the spawn, because it launches a detached `--dangerously-skip-permissions` session. Pass `--no-permission-rule` to skip that. Re-running is safe; uninstall with `rm -rf ~/.claude/skills/committee ~/.claude/skills/committee-loop ~/.claude/workflows/committee-review.js` (and remove the rule from `~/.claude/settings.json`).
 
 Keep the cloned repo around — the skills are symlinked into it. To update, `git pull` in the clone; no reinstall needed.
+
+### Windows
+
+Install from PowerShell with `.\install.ps1` (needs Developer Mode or an elevated shell for the symlinks). `/committee-loop` runs its detached loop inside **WSL**, because tmux has no native Windows build: invoke it from Claude Code as usual (Git Bash), and `spawn.sh` re-executes itself in WSL. Inside WSL you need `tmux`, `git`, `node`, `claude`, and the reviewer CLIs you want (`kiro-cli`, a Linux build of `codex`, `agy`), each logged in from WSL. Disable reviewers you don't have with `--models` (e.g. `{"reviewers":{"gemini":{"enabled":false},"gemini-pro":{"enabled":false}}}`). Before the first run, start `claude --dangerously-skip-permissions` once inside WSL and accept the Bypass Permissions disclaimer. Details: the "Windows (via WSL)" notes in `.claude/skills/committee-loop/SKILL.md`.
 
 ## Usage
 
