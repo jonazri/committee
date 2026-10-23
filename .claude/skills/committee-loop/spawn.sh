@@ -228,7 +228,7 @@ check_skill_or_plugin() {
   for root in "${roots[@]}"; do
     [ -d "$root" ] || continue
     for pat in "${patterns[@]}"; do
-      find -H "$root" -type d \( -name "$pat" -o -path "*/$pat" -o -path "*/$pat/*" \) 2>/dev/null | grep -q . && return 0
+      find -H "$root" -type d \( -name "$pat" -o -path "*/$pat" -o -path "*/$pat/*" \) -print -quit 2>/dev/null | grep -q . && return 0
     done
   done
   echo "$label not found under ${CLAUDE_CONFIG_DIR:+$CLAUDE_CONFIG_DIR, }~/.claude or $ORIGIN_PATH/.claude; install it before running committee-loop" >&2
