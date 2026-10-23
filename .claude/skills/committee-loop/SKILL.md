@@ -51,7 +51,9 @@ Parse one or more repo-relative file paths from the user's argument, then call `
 # Resolve repo root explicitly — outer agent's cwd is not guaranteed to be the
 # repo root, so a bare `find .claude ...` would miss a repo-installed skill.
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
-SEARCH_ROOTS=( "$HOME/.claude" )
+SEARCH_ROOTS=()
+[ -n "${CLAUDE_CONFIG_DIR:-}" ] && SEARCH_ROOTS+=( "$CLAUDE_CONFIG_DIR/skills" )
+SEARCH_ROOTS+=( "$HOME/.claude" )
 [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/.claude" ] && SEARCH_ROOTS+=( "$REPO_ROOT/.claude" )
 SKILL_DIR=""
 while IFS= read -r candidate; do
@@ -63,7 +65,7 @@ while IFS= read -r candidate; do
     real_dir=$(dirname -- "$real")
     [ -f "$real_dir/spawn.sh" ] && { SKILL_DIR="$real_dir"; break; }
   fi
-done < <(find "${SEARCH_ROOTS[@]}" -type d -name committee-loop 2>/dev/null)
+done < <(find -H "${SEARCH_ROOTS[@]}" -type d -name committee-loop 2>/dev/null)
 [ -n "$SKILL_DIR" ] || { echo "committee-loop skill not found (no spawn.sh adjacent to SKILL.md)" >&2; exit 1; }
 bash "$SKILL_DIR/spawn.sh" <path1> [<path2> ...]
 ```

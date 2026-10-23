@@ -69,6 +69,9 @@ Locate the skill dir (handles both full install and SKILL.md-only symlink instal
 
 ```bash
 SKILL_DIR=""
+SEARCH_ROOTS=()
+[ -n "${CLAUDE_CONFIG_DIR:-}" ] && SEARCH_ROOTS+=( "$CLAUDE_CONFIG_DIR/skills" )
+SEARCH_ROOTS+=( "$HOME/.claude" .claude )
 while IFS= read -r candidate; do
   if [ -f "$candidate/prepare.sh" ]; then
     SKILL_DIR="$candidate"; break
@@ -78,7 +81,7 @@ while IFS= read -r candidate; do
     real_dir=$(dirname -- "$real")
     [ -f "$real_dir/prepare.sh" ] && { SKILL_DIR="$real_dir"; break; }
   fi
-done < <(find "$HOME/.claude" .claude -type d -name committee 2>/dev/null)
+done < <(find -H "${SEARCH_ROOTS[@]}" -type d -name committee 2>/dev/null)
 [ -n "$SKILL_DIR" ] || { echo "committee skill not found (no prepare.sh)" >&2; exit 1; }
 # Resolve committee's OWN prompts dir from the install location — NEVER from the
 # repo under review. Reading `$PROJECT_ROOT/prompts/...` first would let a reviewed
@@ -86,10 +89,10 @@ done < <(find "$HOME/.claude" .claude -type d -name committee 2>/dev/null)
 # prompts/reviewers/claude.md) shadow committee's prompt → broken substitution or
 # prompt injection from untrusted code. Derive it from $SKILL_DIR instead.
 PROMPTS_DIR=""
-for cand in "$SKILL_DIR/../../../prompts" "$SKILL_DIR/prompts" "$HOME/.claude/skills/committee/prompts"; do
+for cand in "$SKILL_DIR/../../../prompts" "$SKILL_DIR/prompts" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/committee/prompts" "$HOME/.claude/skills/committee/prompts"; do
   [ -f "$cand/committee-review.js" ] && { PROMPTS_DIR=$(realpath "$cand"); break; }
 done
-[ -n "$PROMPTS_DIR" ] || { echo "committee prompts dir not found (looked under \$SKILL_DIR and ~/.claude)" >&2; exit 1; }
+[ -n "$PROMPTS_DIR" ] || { echo "committee prompts dir not found (looked under \$SKILL_DIR, \$CLAUDE_CONFIG_DIR and ~/.claude)" >&2; exit 1; }
 echo "PROMPTS_DIR=$PROMPTS_DIR"
 bash "$SKILL_DIR/prepare.sh" --scope=<type> <scope-args>
 ```

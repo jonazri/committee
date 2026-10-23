@@ -209,7 +209,8 @@ git rev-parse --path-format=absolute --git-dir >/dev/null 2>&1 \
   || { echo "git too old (need 2.31+ for rev-parse --path-format); upgrade git" >&2; exit 1; }
 
 # Depends on installed skills/plugins. Only check ones that reliably show up
-# as directories under ~/.claude or $ORIGIN_PATH/.claude: ralph-loop, committee,
+# as directories under $CLAUDE_CONFIG_DIR/{skills,plugins}, ~/.claude or
+# $ORIGIN_PATH/.claude: ralph-loop, committee,
 # superpowers:receiving-code-review. `simplify` is NOT checked — it is
 # harness-registered. The Claude reviewer is dispatched as the built-in
 # `general-purpose` agent (not a plugin `code-reviewer` agent type, which
@@ -219,15 +220,18 @@ git rev-parse --path-format=absolute --git-dir >/dev/null 2>&1 \
 check_skill_or_plugin() {
   local label="$1"; shift
   local -a patterns=( "$@" )
-  local roots=( "$HOME/.claude" "$ORIGIN_PATH/.claude" )
+  local roots=()
+  # cus-style config dirs symlink skills/ and plugins/; find -H follows those start points.
+  [ -n "${CLAUDE_CONFIG_DIR:-}" ] && roots+=( "$CLAUDE_CONFIG_DIR/skills" "$CLAUDE_CONFIG_DIR/plugins" )
+  roots+=( "$HOME/.claude" "$ORIGIN_PATH/.claude" )
   local root pat
   for root in "${roots[@]}"; do
     [ -d "$root" ] || continue
     for pat in "${patterns[@]}"; do
-      find "$root" -type d \( -name "$pat" -o -path "*/$pat" -o -path "*/$pat/*" \) 2>/dev/null | grep -q . && return 0
+      find -H "$root" -type d \( -name "$pat" -o -path "*/$pat" -o -path "*/$pat/*" \) 2>/dev/null | grep -q . && return 0
     done
   done
-  echo "$label not found under ~/.claude or $ORIGIN_PATH/.claude; install it before running committee-loop" >&2
+  echo "$label not found under ${CLAUDE_CONFIG_DIR:+$CLAUDE_CONFIG_DIR, }~/.claude or $ORIGIN_PATH/.claude; install it before running committee-loop" >&2
   exit 1
 }
 check_skill_or_plugin "ralph-loop plugin"                       "ralph-loop"
