@@ -41,14 +41,14 @@ Parse the user's argument (if any) into one of these scopes:
 - **Operator model overrides** (all optional; absent = committee default; none go to `prepare.sh`). Parse each and pass it through to the workflow `args` under the named key. The workflow sanitizes model ids to `[A-Za-z0-9._-]`, effort levels to lowercase letters only (they are enums: `minimal|low|medium|high|xhigh`), and the verifier model to `opus|sonnet|haiku` (it is always a Claude agent) — anything invalid silently falls back to the default rather than erroring.
   - `--codex-model=<id>` → `codexModel` (e.g. `gpt-5.5`; default: codex CLI's configured model)
   - `--codex-effort=<level>` → `codexEffort` (lowercase, e.g. `xhigh`; default `high`)
-  - `--gemini-model=<id>` → `geminiModel` (an `agy` model id; pins the primary Gemini reviewer, which runs via the `agy` CLI; default: the agy 1.1.6 compatibility id `gemini-3.5-flash` with `--effort high`, no fallback. Exact tiered overrides such as `gemini-3.5-flash-low` omit `--effort`, because agy rejects a conflicting tier+effort combination.)
-  - `--gemini-pro-model=<id>` → `geminiProModel` (an `agy` model id; pins the 5th Gemini-Pro reviewer, which runs via the `agy` CLI; default: trusted display name `Gemini 3.1 Pro (High)`. agy 1.1.6 advertises raw `gemini-3.1-pro-high` but an active-model canary shows that selector silently resolves Gemini 3.6 Flash; the display name still resolves Pro High, while raw `gemini-3.1-pro-low` resolves Pro Low. Operator overrides stay raw-id-shaped under `MODEL_RE`, so High remains default-only and Low is the verified raw override. At the default pin a single Pro→Flash retry to `gemini-3.5-flash --effort high` fires on empty output; passing `--gemini-pro-model` suppresses that retry. Re-run an active-model canary—not just `agy models`—on every agy upgrade.)
+  - `--gemini-model=<id>` → `geminiModel` (an `agy` model id from `agy models`, e.g. `gemini-3.8-flash-medium`; pins the primary Gemini reviewer, which runs via the `agy` CLI; no fallback. Default: `@flash`, which `agy-review.sh` resolves at run time to the newest `gemini-<ver>-flash-high` id listed by `agy models` (fallback `gemini-3.8-flash-high`, the id verified by an active-model canary on agy 1.3.1). No `--effort` is passed: tiered ids encode their tier, and if agy reports that a model rejects or requires `--effort`, the helper retries once without it or with `--effort high`.)
+  - `--gemini-pro-model=<id>` → `geminiProModel` (an `agy` model id; pins the 5th Gemini-Pro reviewer, which runs via the `agy` CLI; default: trusted display name `Gemini 3.1 Pro (High)`, verified Pro by an active-model canary on agy 1.3.1. Raw `gemini-3.1-pro-high` and `gemini-3.1-pro-low` also resolve Pro on 1.3.1, but on 1.1.6 raw `gemini-3.1-pro-high` silently resolved Gemini 3.6 Flash, so the display name stays the default. At the default pin a single Pro→Flash retry to `@flash` fires on empty output; passing `--gemini-pro-model` suppresses that retry. Re-run an active-model canary—not just `agy models`—on every agy upgrade.)
   - `--verifier-model=opus|sonnet|haiku` → `verifierModel` (default `sonnet`)
   - `--reviewers=<csv>` → `enabledReviewers` (a `,`-separated allowlist from `claude,codex,kiro,gemini,gemini-pro,fable`; runs ONLY those. Split on `,`, lowercase each, pass as a JSON array. Absent = the five defaults. `fable` is a 6th OPT-IN reviewer — a second Claude-family voice on the Fable model reusing the Claude reviewer lens; it joins only when named here, so the canonical 5-reviewer panel is unchanged for everyone else.)
   - `--fable-model=<id>` → `fableModel` (model for the opt-in Fable reviewer; default `fable`)
   - `--adjudications=<path>` → `adjudicationsPath` (single path token, argv-safe like `--plan`. A prior-adjudications context file — REFUTED/SETTLED/ACCEPTED-RISK items with evidence plus recently-edited regions. Primarily passed by `committee-loop`, which distills it from its decision ledger each round; the workflow injects it into every reviewer AND verifier prompt with a "re-raise only with NEW evidence" rule, and assigns one reviewer — Gemini-Pro when enabled, else Claude — an anti-recency coverage lens that hunts latent issues in NOT-recently-edited content. Constraints the workflow enforces (invalid → dropped with a logged warning): absolute path INSIDE the reviewed repo, charset `[A-Za-z0-9._/-]`, no `..` segments. Two carve-outs it logs rather than hides: on auto-trust commit/branch/uncommitted scopes the native `codex review` subcommand takes no prompt, so Codex misses the digest; a `--reviewers` subset excluding both gemini-pro and claude runs without the lens.)
 
-  Operator-configurable effort is available for `--codex-effort` (Codex) and, in committee-loop, the inner-agent's spawn `--effort`. The workflow also supplies agy's required `high` compatibility effort for the untiered Flash default/retry, but does not expose that as a separate operator flag; exact tiered Gemini model overrides encode their effort in the model id. The in-workflow Claude reviewer / verifier expose no per-agent effort knob. These are primarily driven by `committee-loop`'s operator model-override config (`.committee-loop-models.json`); a human can also pass them to a one-shot `/committee`.
+  Operator-configurable effort is available for `--codex-effort` (Codex) and, in committee-loop, the inner-agent's spawn `--effort`. Gemini effort is selected through the tiered model id (e.g. `-flash-high` vs `-flash-low`), not a separate flag. The in-workflow Claude reviewer / verifier expose no per-agent effort knob. These are primarily driven by `committee-loop`'s operator model-override config (`.committee-loop-models.json`); a human can also pass them to a one-shot `/committee`.
 
 - `--trust=<level>` (one of `auto`, `read-only`) pre-selects the trust level for CLI reviewers, skipping the interactive trust dialog below. Used by `committee-loop` to avoid blocking on the dialog in unattended `--dangerously-skip-permissions` sessions. Do NOT include in the `prepare.sh` invocation.
 
@@ -65,7 +65,9 @@ If validation fails, abort before dispatching and tell the user which input was 
 
 ## Resolve scope and set up the session
 
-Locate the skill dir (handles both full install and SKILL.md-only symlink installs), then call `prepare.sh` with the scope + scope-specific args. `prepare.sh` preflights the git repo, creates `$PROJECT_ROOT/.committee/session-XXXXXX/`, writes `diff.txt` / `diff_stat.txt` / `diff.err`, emits a manifest on stdout and to `$SESSION_DIR/manifest.txt`, and prints a stderr warning for three-dot-normalized ranges (relay it to the user verbatim).
+Locate the skill dir (handles both full install and SKILL.md-only symlink installs), then call `prepare.sh` with the scope + scope-specific args. `prepare.sh` preflights the git repo, creates `$PROJECT_ROOT/.committee/session-XXXXXX/`, writes `diff.txt` / `diff_stat.txt` / `diff.err`, copies the install's workflow script into the session dir, emits a manifest on stdout and to `$SESSION_DIR/manifest.txt`, and prints a stderr warning for three-dot-normalized ranges (relay it to the user verbatim).
+
+**Outside a git repo**, only `plan` and `files` scopes run (every other scope fails with a clear error). `PROJECT_ROOT` is then the current directory (for `plan`, the plan's own directory when the plan is outside the current directory), the session dir is created under `${XDG_CACHE_HOME:-~/.cache}/committee/` so nothing is written into the reviewed directory, and the manifest carries `NO_GIT=1`.
 
 ```bash
 SKILL_DIR=""
@@ -93,8 +95,9 @@ for cand in "$SKILL_DIR/../../../prompts" "$SKILL_DIR/prompts" "${CLAUDE_CONFIG_
   [ -f "$cand/committee-review.js" ] && { PROMPTS_DIR=$(realpath "$cand"); break; }
 done
 [ -n "$PROMPTS_DIR" ] || { echo "committee prompts dir not found (looked under \$SKILL_DIR, \$CLAUDE_CONFIG_DIR and ~/.claude)" >&2; exit 1; }
+echo "SKILL_DIR=$SKILL_DIR"
 echo "PROMPTS_DIR=$PROMPTS_DIR"
-bash "$SKILL_DIR/prepare.sh" --scope=<type> <scope-args>
+bash "$SKILL_DIR/prepare.sh" --scope=<type> <scope-args> --prompts-dir="$PROMPTS_DIR"
 ```
 
 **Scope-arg patterns** (match `--scope=<type>` to the invocation the user gave):
@@ -111,9 +114,9 @@ bash "$SKILL_DIR/prepare.sh" --scope=<type> <scope-args>
 
 **Vague scope is a pre-step, not a dispatch.** `prepare.sh --scope=vague` lists candidate commits to stdout and exits 0 without creating a session. Show the output to the user and ask them to re-invoke `/committee` with an explicit scope.
 
-Also capture `PROMPTS_DIR` from the `echo` above — the `committee-review` workflow and **every** committee prompt template it reads (reviewers/claude, reviewers/kiro, reviewers/gemini, verifier) load from `$PROMPTS_DIR`, never from `$PROJECT_ROOT`.
+Also capture `SKILL_DIR` and `PROMPTS_DIR` from the `echo`s above and reuse them in later steps — the `committee-review` workflow and **every** committee prompt template it reads (reviewers/claude, reviewers/kiro, reviewers/gemini, verifier) load from `$PROMPTS_DIR`, never from `$PROJECT_ROOT`.
 
-Parse the manifest to pull: `SESSION_DIR`, `PROJECT_ROOT`, `SCOPE_TYPE`, `SCOPE_DESCRIPTION`, `BASE_SHA`, `HEAD_SHA`, `COMMIT_SHA` (commit scope only), `BASE_BRANCH`, `HEAD_BRANCH`, `PR_NUMBER`, `PR_BASE_REF` (PR scope: the single ref prepare.sh fetched into the skill's `refs/pr-committee/` namespace; delete it on cleanup), `SPEC_PATH`, `RANGE_NORMALIZED` (sha_range scope: set to `1` when input was three-dot — surface this to the user verbatim: "Note: three-dot range was normalized to two-dot. Review covers changes between the two commits, not symmetric-diff against merge-base.").
+Parse the manifest to pull: `SESSION_DIR`, `PROJECT_ROOT`, `SCOPE_TYPE`, `SCOPE_DESCRIPTION`, `BASE_SHA`, `HEAD_SHA`, `COMMIT_SHA` (commit scope only), `BASE_BRANCH`, `HEAD_BRANCH`, `PR_NUMBER`, `PR_BASE_REF` (PR scope: the single ref prepare.sh fetched into the skill's `refs/pr-committee/` namespace; delete it on cleanup), `SPEC_PATH`, `RANGE_NORMALIZED` (sha_range scope: set to `1` when input was three-dot — surface this to the user verbatim: "Note: three-dot range was normalized to two-dot. Review covers changes between the two commits, not symmetric-diff against merge-base."), `NO_GIT` (`1` for a plan/files review outside a git repo), `WORKFLOW_SCRIPT` (prepare.sh's copy of `$PROMPTS_DIR/committee-review.js` inside `$SESSION_DIR`).
 
 ## Progress notification
 
@@ -151,7 +154,7 @@ Otherwise, call the `AskUserQuestion` tool with:
 - **Option 1** — `Read-only (Recommended)` — `Safest; use for untrusted code. Gemini (agy) runs under a per-run-HOME permissions.allow/deny lockdown — repo reads explicitly allowed, but writes, shell, AND URL/network fetch denied (fail-closed); Kiro is fs-read-only; Codex runs '--sandbox read-only'. Not exfil-safe: agy's reads are not filesystem-confined, so a prompt-injected diff could read local files and echo them into the review output (accepted risk).`
 - **Option 2** — `Auto Mode` — `For TRUSTED content only. Relaxes the lockdown: Gemini (agy) may additionally use the network/web, and Codex follows your codex config's sandbox (which can allow writes if you widened it). Gemini and Kiro STILL cannot write to or run commands in your repo — writes/shell are denied in BOTH modes. The Claude reviewer inherits the parent session's auto-mode classifier either way.`
 
-**Note for plan scope:** if the scope is `plan` (`--plan`/`--spec`), the workflow forces read-only regardless of the answer here. (As of 2026-06-23 no reviewer can write or execute in either mode anyway; forcing read-only for a plan additionally denies the network/URL exfil channel — the safest posture for untrusted imperative content.) You may still present the dialog (harmless), or just tell the user plan reviews always run read-only.
+**Note for plan scope:** if the scope is `plan` (`--plan`/`--spec`), the workflow forces read-only regardless of the answer here. (As of 2026-06-23 no reviewer can write or execute in either mode anyway; forcing read-only for a plan additionally denies the network/URL exfil channel — the safest posture for untrusted imperative content.) You may still present the dialog (harmless), or just tell the user plan reviews always run read-only. The same applies when the manifest has `NO_GIT=1`: the workflow forces read-only for any review outside a git repo.
 
 Record the answer as `auto` or `read-only`. Default to `read-only` if unanswered or on tool failure.
 
@@ -172,7 +175,14 @@ If it is missing, abort cleanly:
 
 The `committee-review` workflow owns all five reviewers (Claude as a built-in `general-purpose` agent filled from `$PROMPTS_DIR/reviewers/claude.md`, the Codex/Kiro CLIs, plus both Gemini reviewers — which run via the `agy` (Antigravity) CLI, NOT the legacy `gemini` binary: the primary Gemini reviewer and a second Gemini pinned to the display name `Gemini 3.1 Pro (High)`), runs a verifier agent per reviewer, and returns a structured result. The skill no longer dispatches Claude or any reviewer subagent itself, and it no longer fills the Claude template or picks the review lens — the workflow does that internally per `scopeType` (its `lensFor`/`focusAreas`).
 
-Invoke the `Workflow` tool with `name: "committee-review"`. **If it errors as not-found / unknown workflow** (named user-scope resolution from `~/.claude/workflows/` is environment-dependent), immediately retry with `scriptPath` set to the **resolved** `$PROMPTS_DIR` value followed by `/committee-review.js` — substitute the absolute path (e.g. `/home/<you>/.claude/skills/committee/prompts/committee-review.js`), not the literal string `$PROMPTS_DIR`. Pass `args`:
+Invoke the `Workflow` tool with the same `args` (below) at each step of this chain, moving to the next step only when the current one errors:
+
+1. `name: "committee-review"`. Named lookup reads `${CLAUDE_CONFIG_DIR:-~/.claude}/workflows/` (plus project `.claude/workflows/`); it fails with `Workflow "committee-review" not found` when the active config dir lacks the `install.sh` symlink.
+2. `scriptPath` = the manifest's `WORKFLOW_SCRIPT` (absolute path). The Workflow tool only accepts a script inside a directory the session can already read (its working directory or an added directory), so this works when `$SESSION_DIR` is under the session's working directory — typically when the session was started at the reviewed repo's root. Skip this step when it is not (usually the case with `NO_GIT=1`, where `$SESSION_DIR` is under `~/.cache/committee/`).
+3. When step 2 is skipped or rejected (`scriptPath must be a script path this tool returned, or a file you can already read`): copy the install's script into your session scratchpad directory (the one named in your system prompt) with a real copy, never a symlink (the tool resolves symlinks and checks the target): `cp -- "$PROMPTS_DIR/committee-review.js" "<scratchpad>/committee-review.js"`, then retry with `scriptPath` = that copy.
+4. Only if there is no scratchpad directory or step 3 is also rejected: Read `$PROMPTS_DIR/committee-review.js` and pass its complete content as `script` (≈45 KB of tool input — last resort).
+
+Always copy or read the script from the install-resolved `$PROMPTS_DIR` (or prepare.sh's copy of it), never from the repo under review. After the run, tell the user if step 1 failed so they can re-run `install.sh` for their config dir.
 
 ```
 {
@@ -181,13 +191,13 @@ Invoke the `Workflow` tool with `name: "committee-review"`. **If it errors as no
   sessionDir, promptsDir,
   diffPath: "<SESSION_DIR>/diff.txt", diffStatPath: "<SESSION_DIR>/diff_stat.txt",
   staticPath: "<SESSION_DIR>/static.txt",
-  trust, reviewerModel,
+  trust, reviewerModel, noGit,
   codexModel, codexEffort, geminiModel, geminiProModel, verifierModel, enabledReviewers,
   fableModel, adjudicationsPath
 }
 ```
 
-Substitute manifest values: `scopeType`=SCOPE_TYPE, `scopeDescription`=SCOPE_DESCRIPTION, `projectRoot`=PROJECT_ROOT, `promptsDir`=$PROMPTS_DIR (the install-resolved dir — the workflow loads every reviewer/verifier template from here, never from the repo under review), `sessionDir`=$SESSION_DIR, `baseSha`=BASE_SHA, `headSha`=HEAD_SHA, `commitSha`=COMMIT_SHA, `baseBranch`=BASE_BRANCH, `headBranch`=HEAD_BRANCH, `prNumber`=PR_NUMBER, `prBaseRef`=PR_BASE_REF, `specPath`=SPEC_PATH, `trust`=the recorded trust level, `reviewerModel`=the parsed `--reviewer-model` (omit if absent). The operator-override keys (`codexModel`/`codexEffort`/`geminiModel`/`geminiProModel`/`verifierModel`/`enabledReviewers`/`fableModel`/`adjudicationsPath`) come from the flags above — **omit any that weren't passed** (do NOT send empty strings; the workflow treats an omitted key as "use the default"). `enabledReviewers` is a JSON array of lowercase names. Omit fields you don't have (e.g. `prNumber`/`prBaseRef`/`baseBranch` outside their scopes). The workflow defaults absent SHAs to `none` and `commitSha` to `N/A`, sanitizes every override to `[A-Za-z0-9._-]` (dropping invalid ones), and accepts `args` whether the harness delivers it as an object or a JSON string.
+Substitute manifest values: `scopeType`=SCOPE_TYPE, `scopeDescription`=SCOPE_DESCRIPTION, `projectRoot`=PROJECT_ROOT, `promptsDir`=$PROMPTS_DIR (the install-resolved dir — the workflow loads every reviewer/verifier template from here, never from the repo under review), `sessionDir`=$SESSION_DIR, `baseSha`=BASE_SHA, `headSha`=HEAD_SHA, `commitSha`=COMMIT_SHA, `baseBranch`=BASE_BRANCH, `headBranch`=HEAD_BRANCH, `prNumber`=PR_NUMBER, `prBaseRef`=PR_BASE_REF, `specPath`=SPEC_PATH, `trust`=the recorded trust level, `reviewerModel`=the parsed `--reviewer-model` (omit if absent), `noGit`=`true` when the manifest has `NO_GIT=1` (omit otherwise). The operator-override keys (`codexModel`/`codexEffort`/`geminiModel`/`geminiProModel`/`verifierModel`/`enabledReviewers`/`fableModel`/`adjudicationsPath`) come from the flags above — **omit any that weren't passed** (do NOT send empty strings; the workflow treats an omitted key as "use the default"). `enabledReviewers` is a JSON array of lowercase names. Omit fields you don't have (e.g. `prNumber`/`prBaseRef`/`baseBranch` outside their scopes). The workflow defaults absent SHAs to `none` and `commitSha` to `N/A`, sanitizes every override to `[A-Za-z0-9._-]` (dropping invalid ones), and accepts `args` whether the harness delivers it as an object or a JSON string.
 
 ## Failure modes
 

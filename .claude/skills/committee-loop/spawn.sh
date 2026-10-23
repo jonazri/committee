@@ -63,7 +63,10 @@ fi
   exit 1
 }
 
-ORIGIN_PATH=$(git rev-parse --show-toplevel)
+ORIGIN_PATH=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "committee-loop must run inside a git repository (it reviews in an isolated git worktree); for a one-shot review outside git use /committee --plan or --files" >&2
+  exit 1
+}
 # Positive allowlist for the origin repo path: only [a-zA-Z0-9._/-]. Anything
 # else (parens, brackets, braces, commas, `*`, `?`, `#`, `!`, whitespace,
 # shell metacharacters) would survive a naive deny-list but its %q escape

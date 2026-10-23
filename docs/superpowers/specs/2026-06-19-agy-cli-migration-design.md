@@ -30,9 +30,7 @@ authoritative user-facing statement.
 **REVISION (2026-07-24, agy v1.1.6 compatibility).** Headless mode now auto-denies any tool without
 an explicit `permissions.allow` entry, so the per-run settings must explicitly allow
 `read_file(*)`/`view_file(*)`/`grep_search(*)`/`list_dir(*)` while retaining the deny list below.
-The untiered `gemini-3.5-flash` compatibility id now requires `--effort low|medium|high`; committee
-uses `--effort high` for the primary and its retry. Tiered ids encode effort and reject a conflicting
-`--effort`, so operator-supplied tiered ids omit the flag. Since v1.1.1, agy intentionally ignores
+Flash selection and `--effort` are covered by Verified Fact #2 (revised for v1.3.1 on 2026-10-08). Since v1.1.1, agy intentionally ignores
 stdin when a prompt is also supplied to `-p`; the helper now stages the fenced artifact under the
 per-run HOME and tells agy's explicitly allowed `read_file` tool to load it, avoiding both lost input
 and argv-size limits. `agy models` advertises raw `gemini-3.1-pro-high`, but an active-model canary
@@ -82,15 +80,20 @@ context7 `/google-antigravity/antigravity-cli`, permissions reference).
    seeing the piped diff. The helper buffers/validates stdin, stages it in the per-run HOME, and passes
    a small trusted `-p` prompt telling `read_file` to load that absolute path. Passing the whole diff
    in argv is rejected because large reviews can exceed `ARG_MAX`.
-2. **Models / effort (updated for v1.1.6 on 2026-07-24).** `agy models` advertises tiered raw ids
-   `gemini-3.5-flash-{high,medium,low}` and `gemini-3.1-pro-{high,low}`, but the catalog is not proof
-   of the active tier: `gemini-3.1-pro-high` self-reports Gemini 3.6 Flash. The display name
-   `Gemini 3.1 Pro (High)` self-reports Pro High and remains the trusted default literal (safely
-   `shq()`-quoted); raw `gemini-3.1-pro-low` self-reports Pro Low and is the verified override that
-   passes `MODEL_RE = /^[A-Za-z0-9._-]+$/`. The untiered compatibility id `gemini-3.5-flash` works only
-   with `--effort low|medium|high`; committee uses `high`. A tiered id plus a different explicit
-   effort is rejected as a conflict, so exact tiered operator overrides omit `--effort`. Re-run
-   an active-model canary on every upgrade; `agy models` alone is insufficient (Fact #9).
+2. **Models / effort (updated for v1.3.1 on 2026-10-08).** `agy models` prints `<raw-id>\t<display name>`
+   lines; v1.3.1 lists only tiered ids (`gemini-3.{6,7,8}-flash-{high,medium,low}`,
+   `gemini-3.1-pro-{high,low}`) and no longer recognizes `gemini-3.5-flash`. The `--effort` contract has
+   drifted across versions: v1.1.6 required `--effort` for untiered `gemini-3.5-flash`, v1.1.22 rejected
+   it for that id, and v1.3.1 rejects `--effort` for display names and any effort that conflicts with a
+   tiered id. Committee therefore passes no `--effort`: the primary default and the Pro→Flash retry use
+   `@flash`, which `agy-review.sh` resolves to the newest `gemini-<ver>-flash-high` id in `agy models`
+   (fallback `gemini-3.8-flash-high`), and the helper retries once without `--effort` (or with
+   `--effort high`) when agy reports the pairing is rejected (or required). The display name
+   `Gemini 3.1 Pro (High)` remains the trusted Pro default literal (safely `shq()`-quoted). The catalog
+   is not proof of the active tier: on v1.1.6 raw `gemini-3.1-pro-high` self-reported Gemini 3.6 Flash;
+   on v1.3.1 it, `gemini-3.1-pro-low`, and the display name all self-report Pro, and
+   `gemini-3.8-flash-high` self-reports Gemini 3.8 Flash. Re-run an active-model canary on every
+   upgrade; `agy models` alone is insufficient (Fact #9).
 3. **`--dangerously-skip-permissions` bypasses the settings gate and is never used** (updated
    2026-06-23). Both trust modes use the explicit per-run allow/deny settings; auto differs only by
    omitting the four network denials.
@@ -147,7 +150,7 @@ context7 `/google-antigravity/antigravity-cli`, permissions reference).
 
 | Reviewer    | Old (`gemini`)                                   | New (`agy`)                          |
 |-------------|--------------------------------------------------|--------------------------------------|
-| Gemini      | unpinned + pro→flash fallback                    | `--model gemini-3.5-flash --effort high`, **drop on failure** |
+| Gemini      | unpinned + pro→flash fallback                    | `--model @flash` (helper-resolved), **drop on failure** |
 | Gemini-Pro  | `-m gemini-3.1-pro-preview`, **no** fallback     | `--model "Gemini 3.1 Pro (High)"`, **single Pro→Flash retry** (default pin only), then drop |
 
 Both write the same output files as today (`gemini.md`/`.err`, `gemini-pro.md`/`.err`) so the
@@ -159,7 +162,7 @@ reviewer-agent parsing and the verify stage are unchanged.
   flash fallback; the new primary is Flash with no fallback. This is intentional: the Pro-tier Gemini
   perspective is now carried by **Gemini-Pro** (`Gemini 3.1 Pro (High)`), and a fast Flash primary keeps the
   panel's wall-clock down. The primary still honors an operator `--gemini-model` override (the
-  `gemini-3.5-flash` in the §1 table is the *default*, used when no override is given); an override
+  `@flash` in the §1 table is the *default*, used when no override is given); an override
   simply replaces the Flash default and likewise gets no fallback (drop-on-failure).
 - **Gemini-Pro gains a Pro→Flash retry — reversing the old "no fallback on the pro reviewer"
   rationale.** The old code deliberately had no fallback so the 5th reviewer was *always* a latest-pro
@@ -270,7 +273,7 @@ by the helper, AND gated by §7 #6(a)" — three layers, not a single silent ass
 ```
 # primary (read-only block above, or auto block) with --model "Gemini 3.1 Pro (High)", writing gemini-pro.md
 # retry only if NO operator --gemini-pro-model override AND the primary "failed":
-[ -s <session>/gemini-pro.md ] || { <re-run the SAME block with --model gemini-3.5-flash --effort high>; }
+[ -s <session>/gemini-pro.md ] || { <re-run the SAME block with --model @flash>; }
 ```
 
 - **Failure signal (reconciles §4 drop-on-error with the retry, B1):** a call has "failed" when

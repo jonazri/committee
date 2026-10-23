@@ -15,7 +15,7 @@ Committee runs five reviewers in parallel inside the `committee-review` workflow
 | **Claude** | Claude (harness default; `--reviewer-model` to override) | workflow agent (`general-purpose`) + bundled template |
 | **Codex** | GPT-5.4 | workflow agent runs `codex review` / `codex exec` |
 | **Kiro** | Amazon Q | workflow agent runs `kiro-cli chat` |
-| **Gemini** | Gemini 3.5 Flash (High) | workflow agent runs `agy -p --model gemini-3.5-flash --effort high` |
+| **Gemini** | Gemini Flash (High) | workflow agent runs `agy -p --model <newest gemini-<ver>-flash-high from agy models>` |
 | **Gemini-Pro** | Gemini 3.1 Pro (High) | workflow agent runs `agy -p --model "Gemini 3.1 Pro (High)"` (Pro→Flash retry at default pin) |
 
 After the reviewers return, the `committee-review` workflow runs **per-reviewer verifiers** in parallel — one agent each, checking that reviewer's claims against the actual codebase — and returns a structured `{ quorum, degraded, perReviewer }` result. Then the `/committee` skill:
@@ -199,7 +199,7 @@ User session
               │     ├── Claude  — general-purpose agent + bundled template
               │     ├── Codex   — agent runs codex review / codex exec
               │     ├── Kiro    — agent runs kiro-cli chat
-              │     ├── Gemini  — agent runs `agy --model gemini-3.5-flash --effort high`
+              │     ├── Gemini  — agent runs `agy --model <newest Flash High id>`
               │     └── Gemini-Pro — agent runs `agy --model "Gemini 3.1 Pro (High)"` (Pro→Flash retry)
               ├── Verify stage — one verifier agent per reviewer, streamed as each review completes
               └── returns { quorum, degraded, perReviewer }

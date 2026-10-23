@@ -14,6 +14,13 @@
 #   prepare.sh --scope=auto
 #   prepare.sh --scope=vague        --keywords-file=<path>       # no session dir, just candidate listings
 #
+# Optional on every session-creating scope: --prompts-dir=<install-resolved prompts dir>
+# copies its committee-review.js into the session dir and emits WORKFLOW_SCRIPT.
+#
+# plan and files scopes also run outside a git repo: PROJECT_ROOT is then the cwd
+# (plan: the plan's dir when the plan is outside the cwd), the session dir goes under
+# ${XDG_CACHE_HOME:-~/.cache}/committee/, and the manifest carries NO_GIT=1.
+#
 # All user-controlled values arrive via `--key=value` flag parsing (no shell
 # word-splitting). SHA / PR / branch formats are validated before use.
 # Filenames containing a literal newline byte are unsupported by the files
@@ -32,6 +39,7 @@ PATHS_FILE=""
 PLAN=""
 SPEC=""
 KEYWORDS_FILE=""
+PROMPTS_DIR=""
 
 for arg in "$@"; do
   case "$arg" in
@@ -45,6 +53,7 @@ for arg in "$@"; do
     --plan=*)          PLAN="${arg#*=}" ;;
     --spec=*)          SPEC="${arg#*=}" ;;
     --keywords-file=*) KEYWORDS_FILE="${arg#*=}" ;;
+    --prompts-dir=*)   PROMPTS_DIR="${arg#*=}" ;;
     *) echo "prepare.sh: unknown arg: $arg" >&2; exit 1 ;;
   esac
 done
@@ -53,10 +62,18 @@ done
 
 # ---- Preflight ----
 
+NO_GIT=""
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
-  echo "Error: /committee must be run inside a git repository" >&2
-  exit 1
+  case "$SCOPE" in
+    plan|files) NO_GIT=1 ;;
+    *)
+      echo "Error: /committee --scope=$SCOPE must be run inside a git repository (only plan and files scopes work outside one)" >&2
+      exit 1 ;;
+  esac
 }
+
+[ -z "$PROMPTS_DIR" ] || [ -f "$PROMPTS_DIR/committee-review.js" ] \
+  || { echo "Error: --prompts-dir has no committee-review.js: $PROMPTS_DIR" >&2; exit 1; }
 
 # ---- Format validators (belt-and-suspenders; model should validate too) ----
 
@@ -132,6 +149,21 @@ case "$SCOPE" in
   *) echo "Error: unknown scope: $SCOPE" >&2; exit 1 ;;
 esac
 
+# Outside git, the session dir lives in the user cache so the reviewed directory is never written.
+if [ -n "$NO_GIT" ]; then
+  PROJECT_ROOT=$(pwd -P)
+  if [ "$SCOPE" = plan ]; then
+    PLAN_REAL=$(realpath -- "$PLAN") || { echo "Error: could not resolve plan path: $PLAN" >&2; exit 1; }
+    case "$PLAN_REAL" in
+      "$PROJECT_ROOT"/*) ;;
+      *) PROJECT_ROOT=$(dirname -- "$PLAN_REAL") ;;
+    esac
+  fi
+  SESSION_PARENT="${XDG_CACHE_HOME:-$HOME/.cache}/committee"
+else
+  SESSION_PARENT="$PROJECT_ROOT/.committee"
+fi
+
 # ---- Create session dir ----
 
 # Cleanup trap: fires on ANY shell termination (normal exit, explicit exit N,
@@ -165,10 +197,10 @@ cleanup_on_exit() {
   if [ -n "$UNCOMMITTED_UNTRACKED_NUL" ] && [ -f "$UNCOMMITTED_UNTRACKED_NUL" ]; then
     xargs -0 -- git reset -- < "$UNCOMMITTED_UNTRACKED_NUL" >/dev/null 2>&1 || true
   fi
-  # Only clean dirs we know we created under .committee/. Never rm -rf a raw
+  # Only clean dirs we know we created under $SESSION_PARENT. Never rm -rf a raw
   # $SESSION_DIR whose prefix we haven't verified.
   case "${SESSION_DIR:-}" in
-    "$PROJECT_ROOT"/.committee/session-*)
+    "$SESSION_PARENT"/session-*)
       rm -rf -- "$SESSION_DIR" 2>/dev/null || true
       ;;
   esac
@@ -178,8 +210,8 @@ cleanup_on_exit() {
   exit "$rc"
 }
 
-mkdir -p "$PROJECT_ROOT/.committee"
-SESSION_DIR=$(mktemp -d "$PROJECT_ROOT/.committee/session-XXXXXX")
+mkdir -p "$SESSION_PARENT"
+SESSION_DIR=$(mktemp -d "$SESSION_PARENT/session-XXXXXX")
 # Install trap IMMEDIATELY after mktemp. The case prefix-guard inside
 # cleanup_on_exit no-ops on an empty SESSION_DIR, so this is safe even if the
 # sanity check below fires.
@@ -444,6 +476,16 @@ if [ -x "$STATIC_SCRIPT_DIR/static-prepass.sh" ] && [ "${#STATIC_FILES[@]}" -gt 
     2>>"$SESSION_DIR/diff.err" || true
 fi
 
+# ---- Workflow script copy (Workflow scriptPath fallback) ----
+# A real copy, not a symlink: the Workflow tool resolves symlinks and rejects targets
+# outside the session's readable dirs. Runs after the scope handlers so the uncommitted
+# scope's untracked-file listing never picks it up.
+WORKFLOW_SCRIPT=""
+if [ -n "$PROMPTS_DIR" ]; then
+  WORKFLOW_SCRIPT="$SESSION_DIR/committee-review.js"
+  cp -- "$PROMPTS_DIR/committee-review.js" "$WORKFLOW_SCRIPT"
+fi
+
 # ---- Emit manifest ----
 
 MANIFEST="$SESSION_DIR/manifest.txt"
@@ -464,6 +506,8 @@ MANIFEST="$SESSION_DIR/manifest.txt"
   [ -n "$PR" ]          && printf 'PR_BASE_REF=%q\n'   "refs/pr-committee/$PR-base"
   [ -n "$SPEC" ]        && printf 'SPEC_PATH=%q\n'     "$SPEC"
   [ -n "$RANGE_NORMALIZED" ] && printf 'RANGE_NORMALIZED=%q\n' "$RANGE_NORMALIZED"
+  [ -n "$NO_GIT" ]      && printf 'NO_GIT=%q\n'        "$NO_GIT"
+  [ -n "$WORKFLOW_SCRIPT" ] && printf 'WORKFLOW_SCRIPT=%q\n' "$WORKFLOW_SCRIPT"
 } > "$MANIFEST"
 
 # Manifest was written successfully; disarm cleanup_on_exit so the session
