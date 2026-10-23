@@ -50,7 +50,7 @@ The Claude reviewer runs as the built-in `general-purpose` agent using committee
 git clone https://github.com/jonazri/committee.git && cd committee && ./install.sh
 ```
 
-`install.sh` symlinks the `committee` and `committee-loop` skills into `~/.claude/skills/` (and the `committee-review` workflow into `~/.claude/workflows/`), so `/committee` and `/committee-loop` are available in every Claude Code session. Re-running is safe; uninstall with `rm -rf ~/.claude/skills/committee ~/.claude/skills/committee-loop ~/.claude/workflows/committee-review.js`.
+`install.sh [CONFIG_DIR ...]` symlinks the `committee` and `committee-loop` skills into `<config dir>/skills/` (and the `committee-review` workflow into `<config dir>/workflows/`) for each given config dir, else `${CLAUDE_CONFIG_DIR:-~/.claude}`, so `/committee` and `/committee-loop` are available in every Claude Code session under that config dir. Re-running is safe; uninstall with `rm -rf <dir>/skills/committee <dir>/skills/committee-loop <dir>/workflows/committee-review.js`.
 
 Keep the cloned repo around — the skills are symlinked into it. To update, `git pull` in the clone; no reinstall needed.
 
