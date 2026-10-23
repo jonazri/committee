@@ -44,6 +44,10 @@ check "$rc" 0 "non-git plan outside the cwd succeeds"
 check "${PROJECT_ROOT:-}" "$TMP/elsewhere" "PROJECT_ROOT is the plan's dir"
 check "${WORKFLOW_SCRIPT:-unset}" unset "no --prompts-dir → no WORKFLOW_SCRIPT"
 
+XDG_CACHE_HOME=rel HOME="$TMP/home" run "$TMP/work" --scope=plan --plan=plan.md
+case "${SESSION_DIR:-}" in "$TMP/home/.cache/committee/session-"*) s=home ;; *) s="${SESSION_DIR:-}" ;; esac
+check "$rc:$s" "0:home" "relative \$XDG_CACHE_HOME is ignored"
+
 printf 'a.sh\n' > "$TMP/paths.txt"
 run "$TMP/work" --scope=files --paths-file="$TMP/paths.txt"
 check "$rc" 0 "non-git files succeeds"

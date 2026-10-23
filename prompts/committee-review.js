@@ -365,7 +365,7 @@ const agyFramingPro = proGetsLens ? `${agyFraming} ${antiRecencyLens}` : agyFram
 // Every default selector encodes its tier (tiered id or display name), so no --effort is passed;
 // agy-review.sh adapts once if agy reports that a model requires or rejects --effort.
 const agyPipe = (model, outBase, framing = agyFraming) =>
-  `cd ${shq(projectRoot)} && agyhome=$(mktemp -d "\${TMPDIR:-/tmp}/committee-agy.XXXXXX") && trap 'rm -rf "\$agyhome"' EXIT INT TERM && { printf '%s\\n' '<reviewed_content>'; ${geminiInput}; printf '\\n%s\\n' '</reviewed_content>'; } | ` +
+  `cd ${shq(projectRoot)} && agytmp=\${TMPDIR:-/tmp} && case "$(cd "$agytmp" && pwd -P)/" in "$(pwd -P)"/*) agytmp=${shq(a.sessionDir)} ;; esac && agyhome=$(mktemp -d "$agytmp/committee-agy.XXXXXX") && trap 'rm -rf "\$agyhome"' EXIT INT TERM && { printf '%s\\n' '<reviewed_content>'; ${geminiInput}; printf '\\n%s\\n' '</reviewed_content>'; } | ` +
   `bash ${agyScript} ${agyMode} ${shq(model)} '' ${shq(framing)} ${shq(`${a.sessionDir}/${outBase}.md`)} ${shq(`${a.sessionDir}/${outBase}.err`)} "\$agyhome" || { : > ${shq(`${a.sessionDir}/${outBase}.md`)}; echo 'agy-review: agyPipe setup failed (cd projectRoot / mktemp -d) — reviewer dropped' > ${shq(`${a.sessionDir}/${outBase}.err`)}; }; rm -rf "\$agyhome"`
 
 const geminiPrompt = `Run the Gemini reviewer via the Antigravity CLI (agy). Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).

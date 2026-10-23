@@ -159,7 +159,8 @@ if [ -n "$NO_GIT" ]; then
       *) PROJECT_ROOT=$(dirname -- "$PLAN_REAL") ;;
     esac
   fi
-  SESSION_PARENT="${XDG_CACHE_HOME:-$HOME/.cache}/committee"
+  case "${XDG_CACHE_HOME:-}" in /*) SESSION_PARENT=$XDG_CACHE_HOME ;; *) SESSION_PARENT=$HOME/.cache ;; esac
+  SESSION_PARENT=$SESSION_PARENT/committee
 else
   SESSION_PARENT="$PROJECT_ROOT/.committee"
 fi
