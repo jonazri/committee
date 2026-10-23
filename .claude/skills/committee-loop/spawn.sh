@@ -209,7 +209,7 @@ git rev-parse --path-format=absolute --git-dir >/dev/null 2>&1 \
   || { echo "git too old (need 2.31+ for rev-parse --path-format); upgrade git" >&2; exit 1; }
 
 # Depends on installed skills/plugins. Only check ones that reliably show up
-# as directories under $CLAUDE_CONFIG_DIR/{skills,plugins}, ~/.claude or
+# as directories under $CLAUDE_CONFIG_DIR/{skills,plugins} (else ~/.claude) or
 # $ORIGIN_PATH/.claude: ralph-loop, committee,
 # superpowers:receiving-code-review. `simplify` is NOT checked — it is
 # harness-registered. The Claude reviewer is dispatched as the built-in
@@ -221,9 +221,14 @@ check_skill_or_plugin() {
   local label="$1"; shift
   local -a patterns=( "$@" )
   local roots=()
-  # cus-style config dirs symlink skills/ and plugins/; find -H follows those start points.
-  [ -n "${CLAUDE_CONFIG_DIR:-}" ] && roots+=( "$CLAUDE_CONFIG_DIR/skills" "$CLAUDE_CONFIG_DIR/plugins" )
-  roots+=( "$HOME/.claude" "$ORIGIN_PATH/.claude" )
+  # The inner session loads only the active config dir; cus-style dirs symlink skills/ and
+  # plugins/, which find -H follows as start points.
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    roots+=( "$CLAUDE_CONFIG_DIR/skills" "$CLAUDE_CONFIG_DIR/plugins" )
+  else
+    roots+=( "$HOME/.claude" )
+  fi
+  roots+=( "$ORIGIN_PATH/.claude" )
   local root pat
   for root in "${roots[@]}"; do
     [ -d "$root" ] || continue
@@ -231,7 +236,7 @@ check_skill_or_plugin() {
       find -H "$root" -type d \( -name "$pat" -o -path "*/$pat" -o -path "*/$pat/*" \) -print -quit 2>/dev/null | grep -q . && return 0
     done
   done
-  echo "$label not found under ${CLAUDE_CONFIG_DIR:+$CLAUDE_CONFIG_DIR, }~/.claude or $ORIGIN_PATH/.claude; install it before running committee-loop" >&2
+  echo "$label not found under ${CLAUDE_CONFIG_DIR:-~/.claude} or $ORIGIN_PATH/.claude; install it before running committee-loop" >&2
   exit 1
 }
 check_skill_or_plugin "ralph-loop plugin"                       "ralph-loop"
@@ -444,6 +449,12 @@ case "$INNER_LAUNCH" in "cclaude "*|"headroom wrap "*) INNER_WRAPPED=1 ;; *) INN
 # The whole inner process tree runs in its own transient scope (CL_JOB_UNIT), so a
 # runaway job is OOM-killed as a unit without touching sibling jobs.
 INNER_LAUNCH="${CL_BOUNDS_PREFIX:+$CL_BOUNDS_PREFIX }$INNER_LAUNCH"
+# A running tmux server hands new sessions the environment of the caller that started it; pin ours.
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  INNER_LAUNCH="CLAUDE_CONFIG_DIR=$(printf '%q' "$CLAUDE_CONFIG_DIR") $INNER_LAUNCH"
+else
+  INNER_LAUNCH="env -u CLAUDE_CONFIG_DIR $INNER_LAUNCH"
+fi
 tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$WORKTREE_PATH" \
   "$INNER_LAUNCH"
 
