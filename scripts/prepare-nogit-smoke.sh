@@ -66,6 +66,12 @@ check "$rc" 0 "non-git files succeeds"
 check "${NO_GIT:-}" 1 "files manifest carries NO_GIT=1"
 check "$(grep -c '^=== FILE: a.sh ===$' "${SESSION_DIR:-/x}/diff.txt" 2>/dev/null)" 1 "files diff.txt carries the file"
 
+printf 'import os\n' > "$TMP/work/b.py"
+printf 'b.py\n' > "$TMP/paths.txt"
+before=$(find "$TMP/work" | sort)
+run "$TMP/work" --scope=files --paths-file="$TMP/paths.txt"
+check "$rc:$( [ "$(find "$TMP/work" | sort)" = "$before" ] && echo same)" "0:same" "non-git .py files review leaves the reviewed dir untouched (static pre-pass)"
+
 for args in "--scope=commit --commit=abc1234" "--scope=uncommitted" "--scope=branch_diff --base=main"; do
   # shellcheck disable=SC2086
   run "$TMP/work" $args

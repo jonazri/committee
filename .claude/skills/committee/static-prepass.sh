@@ -64,7 +64,7 @@ fi
 
 # --- ruff on .py (if installed) ---
 if [ "${#PY_FILES[@]}" -gt 0 ] && command -v ruff >/dev/null 2>&1; then
-  out=$(ruff check --output-format=concise -- "${PY_FILES[@]}" 2>/dev/null || true)
+  out=$(ruff check --no-cache --output-format=concise -- "${PY_FILES[@]}" 2>/dev/null || true)
   append_section "ruff" "$out"
 fi
 
