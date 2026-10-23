@@ -168,8 +168,9 @@ if [ -n "$NO_GIT" ]; then
   case "${XDG_CACHE_HOME:-}" in /*) cache=$XDG_CACHE_HOME ;; *) cache=$HOME/.cache ;; esac
   SESSION_PARENT=""
   for cand in "$cache/committee" "${TMPDIR:-/tmp}/committee"; do
-    case "$cand" in /*) ;; *) continue ;; esac
-    case "$(phys "$cand")" in "${PROJECT_ROOT%/}/"*) ;; *) SESSION_PARENT=$cand; break ;; esac
+    case "$cand/" in /*/./*|/*/../*) continue ;; /*) ;; *) continue ;; esac
+    resolved=$(phys "$cand")
+    case "$resolved" in "${PROJECT_ROOT%/}/"*) ;; *) SESSION_PARENT=${resolved%/}; break ;; esac
   done
   [ -n "$SESSION_PARENT" ] \
     || { echo "Error: the user cache and \$TMPDIR are both inside $PROJECT_ROOT; set XDG_CACHE_HOME or TMPDIR outside it" >&2; exit 1; }

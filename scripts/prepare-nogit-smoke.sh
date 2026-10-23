@@ -52,9 +52,13 @@ mkdir -p "$TMP/work/tmpx"
 XDG_CACHE_HOME='' HOME="$TMP/work" TMPDIR="$TMP/outside" run "$TMP/work" --scope=plan --plan=plan.md
 case "${SESSION_DIR:-}" in "$TMP/outside/committee/session-"*) s=tmpdir ;; *) s="${SESSION_DIR:-}" ;; esac
 check "$rc:$s:$( [ -e "$TMP/work/.cache" ] && echo wrote )" "0:tmpdir:" "cache inside the reviewed dir falls back to \$TMPDIR"
+before=$(find "$TMP/work" | sort)
 XDG_CACHE_HOME='' HOME="$TMP/work" TMPDIR="$TMP/work/tmpx" run "$TMP/work" --scope=plan --plan=plan.md
-check "$rc:$(grep -c 'both inside' "$TMP/err"):$(find "$TMP/work" -mindepth 1 -newer "$TMP/work/plan.md" ! -path "$TMP/work/tmpx" | wc -l)" "1:1:0" "cache and \$TMPDIR both inside the reviewed dir is rejected"
+check "$rc:$(grep -c 'both inside' "$TMP/err"):$( [ "$(find "$TMP/work" | sort)" = "$before" ] && echo same)" "1:1:same" "cache and \$TMPDIR both inside the reviewed dir is rejected"
 rmdir "$TMP/work/tmpx"
+XDG_CACHE_HOME="$TMP/missing/../work/cache" TMPDIR="$TMP/outside" run "$TMP/work" --scope=plan --plan=plan.md
+case "${SESSION_DIR:-}" in "$TMP/outside/committee/session-"*) s=tmpdir ;; *) s="${SESSION_DIR:-}" ;; esac
+check "$rc:$s:$( [ -e "$TMP/work/cache" ] && echo wrote )" "0:tmpdir:" "a cache path with .. is skipped"
 
 printf 'a.sh\n' > "$TMP/paths.txt"
 run "$TMP/work" --scope=files --paths-file="$TMP/paths.txt"
