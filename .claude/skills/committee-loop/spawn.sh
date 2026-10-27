@@ -55,6 +55,60 @@ if [ "${1:-}" = "--print-inner-launch" ]; then
   build_inner_launch "${2-}"; printf '\n'; exit 0
 fi
 
+# ---- Windows (Git Bash / MSYS2 / Cygwin): re-exec inside WSL ----
+# tmux has no native Windows build, so on Windows the whole loop (tmux, the inner
+# claude, the reviewer CLIs, watcher, health check) runs inside WSL. Translate the
+# invoker's cwd + this script's path to their /mnt/<drive>/... form and re-run this
+# script under a WSL *login* shell (so ~/.local/bin — where claude/kiro-cli/codex
+# usually live — is on PATH). Args are %q-quoted for the WSL bash. MSYS path
+# conversion is disabled for wsl.exe so /mnt/... and JSON args reach WSL verbatim.
+# The manifest the WSL run prints carries WSL paths plus RUNNER=wsl, which tells
+# the outer agent to wrap every watcher / health-check / tmux command in
+# `wsl.exe -e bash -lc '...'` (SKILL.md "Windows"). COMMITTEE_WSL=off opts out
+# (e.g. a Cygwin install that has its own tmux).
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if [ "${COMMITTEE_WSL:-auto}" != off ]; then
+      command -v wsl.exe >/dev/null 2>&1 || {
+        echo "committee-loop on Windows runs inside WSL, but wsl.exe was not found." >&2
+        echo "Install WSL (wsl --install) with tmux, git, node, claude, kiro-cli, codex and agy inside it." >&2
+        exit 1
+      }
+      # A linked worktree made by Git for Windows points at its git dir with a drive path
+      # (gitdir: C:/...) that WSL git cannot open.
+      WIN_TOP=$(git rev-parse --show-toplevel 2>/dev/null || true)
+      if [ -n "$WIN_TOP" ] && [ -f "$WIN_TOP/.git" ] && grep -qE '^gitdir: [A-Za-z]:' "$WIN_TOP/.git"; then
+        echo "committee-loop: $WIN_TOP is a linked worktree created by Git for Windows; WSL git cannot open its gitdir." >&2
+        echo "  Run committee-loop from the primary checkout, or from a worktree created inside WSL (git worktree add in WSL)." >&2
+        exit 1
+      fi
+      to_wsl_path() {
+        MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' wsl.exe -e wslpath -a "$(cygpath -w "$1")" | tr -d '\r'
+      }
+      WSL_CWD=$(to_wsl_path "$PWD")
+      WSL_SPAWN=$(to_wsl_path "$SCRIPT_DIR/spawn.sh")
+      [ -n "$WSL_CWD" ] && [ -n "$WSL_SPAWN" ] \
+        || { echo "could not translate paths for WSL (wslpath failed)" >&2; exit 1; }
+      # wsl.exe forwards no Windows-side environment: carry the operator's COMMITTEE_*
+      # settings, and Git for Windows' system/global core.autocrlf (absent in WSL git) so
+      # the worktree's line endings match origin's checkout. A repo or worktree setting is
+      # visible to WSL git and must keep precedence, so only a system/global value is carried.
+      WSL_ENV="COMMITTEE_RUNNER=wsl"
+      for name in $(compgen -v COMMITTEE_); do
+        case "$name" in COMMITTEE_RUNNER|COMMITTEE_WSL) continue ;; esac
+        WSL_ENV+=" $name=$(printf '%q' "${!name}")"
+      done
+      AUTOCRLF=$(git config --show-scope --get core.autocrlf 2>/dev/null || true)
+      case "$AUTOCRLF" in
+        system$'\t'*|global$'\t'*)
+          WSL_ENV+=" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=$(printf '%q' "${AUTOCRLF#*$'\t'}")" ;;
+      esac
+      WSL_CMD="cd $(printf '%q' "$WSL_CWD") && $WSL_ENV exec bash $(printf '%q' "$WSL_SPAWN")"
+      for arg in "$@"; do WSL_CMD+=" $(printf '%q' "$arg")"; done
+      MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' exec wsl.exe -e bash -lc "$WSL_CMD"
+    fi ;;
+esac
+
 # ---- Preflight: args, targets, tools, skills, git identity ----
 
 [ "$#" -gt 0 ] || {
@@ -140,7 +194,7 @@ if [ -n "$MODELS_JSON" ]; then
     // the inner agent maps reviewers.fable.{enabled,model} onto /committee --reviewers/--fable-model.
     const known = ["claude","codex","kiro","gemini","gemini-pro","fable"];
     for (const [k, s0] of Object.entries(rv)) {
-      if (!known.includes(k.toLowerCase())) { console.error("unknown reviewer key: " + k + " (expected one of " + known.join(", ") + ")"); process.exit(1) }
+      if (!known.includes(k)) { console.error("unknown reviewer key: " + k + " (expected one of " + known.join(", ") + ", lowercase)"); process.exit(1) }
       // NOTE: reviewers.claude.model is validated here but reaches the workflow INDIRECTLY —
       // the inner agent translates it into /committee --reviewer-model=<v> (-> reviewerModel),
       // unlike the codex/gemini/gemini-pro model keys (the gemini keys drive the agy-backed
@@ -150,6 +204,10 @@ if [ -n "$MODELS_JSON" ]; then
       if (s.enabled != null && typeof s.enabled !== "boolean") { console.error("reviewers." + k + ".enabled must be true/false"); process.exit(1) }
       if (s.policy != null && !["pin","adaptive"].includes(s.policy)) { console.error("reviewers." + k + ".policy must be \"pin\" or \"adaptive\""); process.exit(1) }
     }
+    // /committee aborts below a 2-reviewer quorum, and iter-1 runs only claude/kiro/codex.
+    const on = (k) => k === "fable" ? (rv[k] || {}).enabled === true : (rv[k] || {}).enabled !== false;
+    if (known.filter(on).length < 2) { console.error("--models must leave at least 2 reviewers enabled (/committee needs a quorum of 2)"); process.exit(1) }
+    if (!["claude","kiro","codex"].some(on)) { console.error("--models must leave claude, kiro or codex enabled (iter-1 runs only those)"); process.exit(1) }
     const ver = cfg.verifier || {}; chk(ver.model, "verifier.model");
     const eff = ia.effort || "high", mdl = ia.model || "";
     process.stdout.write("--effort " + eff + (mdl ? " --model " + mdl : ""));
@@ -193,8 +251,30 @@ for i in "${!TARGET_FILES[@]}"; do
   TARGET_FILES[$i]="${ABS#$ORIGIN_PATH/}"
 done
 
-for t in tmux claude git realpath sha256sum kiro-cli codex agy timeout; do
-  command -v "$t" >/dev/null || { echo "missing tool: $t" >&2; exit 1; }
+# Reviewer CLIs are only required for reviewers this run actually uses — `--models` can
+# disable kiro / codex / gemini / gemini-pro (`{"enabled": false}`), and gemini + gemini-pro
+# are both agy-backed. Core tools are always required.
+DISABLED_REVIEWERS=""
+if [ -n "$MODELS_JSON" ]; then
+  DISABLED_REVIEWERS=$(MODELS_JSON="$MODELS_JSON" node -e '
+    const r = JSON.parse(process.env.MODELS_JSON).reviewers || {};
+    process.stdout.write(Object.keys(r).filter(k => r[k] && r[k].enabled === false).join(" "));
+  ')
+fi
+reviewer_enabled() { case " $DISABLED_REVIEWERS " in *" $1 "*) return 1 ;; esac; return 0; }
+REQUIRED_TOOLS=( tmux claude git realpath sha256sum timeout )
+if reviewer_enabled kiro; then REQUIRED_TOOLS+=( kiro-cli ); fi
+if reviewer_enabled codex; then REQUIRED_TOOLS+=( codex ); fi
+if reviewer_enabled gemini || reviewer_enabled gemini-pro; then REQUIRED_TOOLS+=( agy ); fi
+for t in "${REQUIRED_TOOLS[@]}"; do
+  command -v "$t" >/dev/null && continue
+  echo "missing tool: $t" >&2
+  case "$t" in
+    kiro-cli) echo "  (kiro reviewer; skip it with --models '{\"reviewers\":{\"kiro\":{\"enabled\":false}}}')" >&2 ;;
+    codex)    echo "  (codex reviewer; skip it with --models '{\"reviewers\":{\"codex\":{\"enabled\":false}}}')" >&2 ;;
+    agy)      echo "  (gemini + gemini-pro reviewers; skip them with --models '{\"reviewers\":{\"gemini\":{\"enabled\":false},\"gemini-pro\":{\"enabled\":false}}}')" >&2 ;;
+  esac
+  exit 1
 done
 
 # GNU realpath -e; BSD realpath (default macOS) does not support it. Behavior
@@ -458,6 +538,16 @@ if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
 else
   INNER_LAUNCH="env -u CLAUDE_CONFIG_DIR $INNER_LAUNCH"
 fi
+case "${GIT_CONFIG_COUNT:-}" in
+  ''|*[!0-9]*) INNER_LAUNCH="env -u GIT_CONFIG_COUNT $INNER_LAUNCH" ;;
+  *)
+    GIT_PIN="GIT_CONFIG_COUNT=$GIT_CONFIG_COUNT"
+    for ((i = 0; i < GIT_CONFIG_COUNT; i++)); do
+      key="GIT_CONFIG_KEY_$i" value="GIT_CONFIG_VALUE_$i"
+      GIT_PIN+=" $key=$(printf '%q' "${!key-}") $value=$(printf '%q' "${!value-}")"
+    done
+    INNER_LAUNCH="$GIT_PIN $INNER_LAUNCH" ;;
+esac
 tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$WORKTREE_PATH" \
   "$INNER_LAUNCH"
 
@@ -468,13 +558,27 @@ for _ in $(seq 1 45); do   # wider: `headroom wrap` adds proxy-handshake latency
   if echo "$PANE" | grep -qF 'bypass permissions on'; then
     READY=true; break
   fi
-  # Claude Code shows a folder-trust prompt for unknown directories BEFORE
-  # entering the main TUI — even under --dangerously-skip-permissions. The
-  # cursor (❯) is pre-positioned on "Yes, I trust this folder" so a bare Enter
-  # confirms. Auto-answer once, then keep polling for the main TUI footer.
+  # First-ever --dangerously-skip-permissions run on this machine shows a one-time
+  # "Bypass Permissions mode" disclaimer. Accepting it is the operator's decision, so
+  # never auto-answer it: abort (the ERR trap unwinds the worktree) with instructions.
+  if echo "$PANE" | grep -qF 'Bypass Permissions mode'; then
+    echo "error: Claude Code's one-time Bypass Permissions disclaimer has not been accepted on this machine." >&2
+    echo "  Run \`claude --dangerously-skip-permissions\` once interactively${COMMITTEE_RUNNER:+ inside WSL}, choose \"Yes, I accept\"," >&2
+    echo "  then /exit and re-run committee-loop." >&2
+    false
+  fi
+  # Claude Code shows a folder-trust prompt for the new worktree BEFORE the main TUI,
+  # even under --dangerously-skip-permissions. The worktree holds the same content as
+  # the origin checkout the operator already trusts. Current Claude Code lists
+  # "No, exit" first and focuses it, and keys sent just after the dialog renders can be
+  # dropped, so move down and confirm only once the pane shows "Yes" focused.
   if ! $TRUST_DISMISSED && echo "$PANE" | grep -qF 'Yes, I trust this folder'; then
-    tmux send-keys -t "$SESSION" Enter
-    TRUST_DISMISSED=true
+    if echo "$PANE" | grep -qF '❯ Yes, I trust this folder'; then
+      tmux send-keys -t "$SESSION" Enter
+      TRUST_DISMISSED=true
+    else
+      tmux send-keys -t "$SESSION" Down
+    fi
   fi
   sleep 1
 done
@@ -565,6 +669,9 @@ MANIFEST="$WORKTREE_PATH/.committee-loop-manifest.txt"
   printf 'TARGET_FILES_JOINED=%q\n' "$TARGET_JOINED"
   printf 'JOB_UNIT=%q\n' "${CL_JOB_UNIT:+$CL_JOB_UNIT.scope}"
   printf 'COMMITTEE_SOCKET=%q\n' "$COMMITTEE_SOCKET"
+  # wsl = spawned from Windows via the WSL re-exec above; wrap every follow-up command
+  # (watcher, health check, tmux) in `wsl.exe -e bash -lc '...'`. native = run as-is.
+  printf 'RUNNER=%q\n' "${COMMITTEE_RUNNER:-native}"
 } > "$MANIFEST"
 # Print to stdout separately (non-pipeline) so a `tee` failure under pipefail
 # can't orphan the live tmux session + watchdog launched above.

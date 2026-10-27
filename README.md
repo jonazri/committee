@@ -50,9 +50,13 @@ The Claude reviewer runs as the built-in `general-purpose` agent using committee
 git clone https://github.com/jonazri/committee.git && cd committee && ./install.sh
 ```
 
-`install.sh [CONFIG_DIR ...]` symlinks the `committee` and `committee-loop` skills into `<config dir>/skills/` (and the `committee-review` workflow into `<config dir>/workflows/`) for each given config dir, else `${CLAUDE_CONFIG_DIR:-~/.claude}`, so `/committee` and `/committee-loop` are available in every Claude Code session under that config dir. Re-running is safe; uninstall with `rm -rf <dir>/skills/committee <dir>/skills/committee-loop <dir>/workflows/committee-review.js`.
+`install.sh [CONFIG_DIR ...]` symlinks the `committee` and `committee-loop` skills into `<config dir>/skills/` (and the `committee-review` workflow into `<config dir>/workflows/`) for each given config dir, else `${CLAUDE_CONFIG_DIR:-~/.claude}`, so `/committee` and `/committee-loop` are available in every Claude Code session under that config dir. It also adds an allow rule for the committee-loop spawn command (`Bash(bash <clone>/.claude/skills/committee-loop/spawn.sh:*)`) to `permissions.allow` in each `<config dir>/settings.json` — without it, Claude Code's auto mode blocks the spawn, because it launches a detached `--dangerously-skip-permissions` session. Pass `--no-permission-rule` to skip that. Re-running is safe; uninstall with `rm -rf <dir>/skills/committee <dir>/skills/committee-loop <dir>/workflows/committee-review.js` (and remove the rule from `<dir>/settings.json`).
 
 Keep the cloned repo around — the skills are symlinked into it. To update, `git pull` in the clone; no reinstall needed.
+
+### Windows
+
+Install from PowerShell with `.\install.ps1 [-ConfigDir <dir>,...]` (same targets and allow rule as `install.sh`; the symlinks need an elevated shell, or PowerShell 7+ with Developer Mode on). `/committee-loop` runs its detached loop inside **WSL**, because tmux has no native Windows build: invoke it from Claude Code as usual (Git Bash), and `spawn.sh` re-executes itself in WSL. Inside WSL you need `tmux`, `git`, `node`, `claude`, and the reviewer CLIs you want (`kiro-cli`, a Linux build of `codex`, `agy`), each logged in from WSL, plus this repo's `./install.sh` run inside WSL, the `ralph-loop` and `superpowers` plugins in WSL's Claude Code, and a WSL git `user.name` / `user.email`. Disable reviewers you don't have with `--models` (e.g. `{"reviewers":{"gemini":{"enabled":false},"gemini-pro":{"enabled":false}}}`). Before the first run, start `claude --dangerously-skip-permissions` once inside WSL and accept the Bypass Permissions disclaimer. Details: the "Windows (via WSL)" notes in `.claude/skills/committee-loop/SKILL.md`.
 
 ## Usage
 
