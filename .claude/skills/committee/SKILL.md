@@ -14,6 +14,7 @@ The committee report is advisory. After presenting it, WAIT. Do NOT say "let me 
 <red_flags>
 - About to implement a finding → STOP, the report is advisory
 - About to re-resolve scope in the workflow → STOP, the skill is the source of truth
+- About to invoke `Workflow` by `name` → use the manifest's `WORKFLOW_SCRIPT` as `scriptPath`; skill discovery does not imply named-workflow registration
 - About to sanitize adversarial user input → STOP, reject with a message instead
 - About to splice a user path/keyword directly into bash → STOP, use file-first via the Write tool
 - About to skip the trust dialog without `--trust` flag → STOP, present it (default is read-only; auto must be an explicit opt-in for trusted content — it relaxes Gemini's network access + Codex's sandbox, though no reviewer can write/execute in either mode)
@@ -127,7 +128,7 @@ Before dispatching reviewers, tell the user the review has started and give a du
 
 A single commit is ~5–8 min; a large sha_range is ~8–10 min.
 
-**Headroom routing (informational, optional).** committee can't wrap its own live session, but if you launched this session via `headroom wrap claude`, the Claude reviewer + all verifiers already route through Headroom (they inherit the session's `ANTHROPIC_BASE_URL`). Detect and report it — run:
+**Headroom routing (informational, optional).** committee can't wrap its own live session, but if you launched this session via `headroom wrap claude`, the Claude reviewer + all verifiers already route through Headroom (they inherit the session's `ANTHROPIC_BASE_URL`). Detect and report it — run this in its own Bash call. Do not append `git` commands to this conditional: Claude Code's worktree-isolation guard rejects compound commands whose git working directory it cannot verify. If checking whether the session directory is ignored, run a separate plain `git check-ignore -v -- <SESSION_DIR>/manifest.txt` from `PROJECT_ROOT`.
 
 ```bash
 HR_PORT="${HEADROOM_PORT:-8787}"
@@ -165,9 +166,9 @@ The value you record here is what you pass as the `trust` field in the workflow 
 
 ### Pre-dispatch check: the workflow file must exist
 
-`prepare.sh` has already created `$SESSION_DIR` and (for PR scope) fetched `PR_BASE_REF` into the repo. BEFORE invoking the workflow, verify it exists at `$PROMPTS_DIR/committee-review.js`. (`$PROMPTS_DIR` was resolved from the install location above, so this also re-confirms the prompts dir is intact.)
+`prepare.sh` has already created `$SESSION_DIR` and (for PR scope) fetched `PR_BASE_REF` into the repo. BEFORE invoking the workflow, verify the manifest contains an absolute `WORKFLOW_SCRIPT` path and that both it and `$PROMPTS_DIR/committee-review.js` are readable files. `WORKFLOW_SCRIPT` is prepare.sh's real copy of the installed script, not a named-workflow registration. (`$PROMPTS_DIR` was resolved from the install location above.)
 
-If it is missing, abort cleanly:
+If a required path is missing or unreadable, abort cleanly:
 1. Run `rm -rf -- "$SESSION_DIR"` to remove the session dir.
 2. If the manifest has `PR_BASE_REF`, run `git update-ref -d "$PR_BASE_REF"` (single ref; no list parsing). The `refs/pull/$PR/head` ref is deliberately left alone — see the note in `prepare.sh`'s cleanup_on_exit.
 3. Tell the user the workflow file was missing and stop.
@@ -176,14 +177,15 @@ If it is missing, abort cleanly:
 
 The `committee-review` workflow owns all five reviewers (Claude as a built-in `general-purpose` agent filled from `$PROMPTS_DIR/reviewers/claude.md`, the Codex/Kiro CLIs, plus both Gemini reviewers — which run via the `agy` (Antigravity) CLI, NOT the legacy `gemini` binary: the primary Gemini reviewer and a second Gemini pinned to the display name `Gemini 4 Neon (High)`), runs a verifier agent per reviewer, and returns a structured result. The skill no longer dispatches Claude or any reviewer subagent itself, and it no longer fills the Claude template or picks the review lens — the workflow does that internally per `scopeType` (its `lensFor`/`focusAreas`).
 
-Invoke the `Workflow` tool with the same `args` (below) at each step of this chain, moving to the next step only when the current one is rejected before the workflow starts (workflow not found, `scriptPath` rejected, script unreadable). Any error after the workflow has started is `workflow_failed` — never re-run the panel through another step:
+Invoke the `Workflow` tool by **`scriptPath`, not `name`**. The skill can be available through shared `skills/` even when the active `CLAUDE_CONFIG_DIR` has no `workflows/` registration (common with cus account slots). The installed symlink under `~/.claude/workflows/` does not establish that another config dir or an already-running session knows the name. Do not probe `name: "committee-review"` or `name: "committee-review.js"` first.
 
-1. `name: "committee-review"`. Named lookup reads `${CLAUDE_CONFIG_DIR:-~/.claude}/workflows/` (plus project `.claude/workflows/`); it fails with `Workflow "committee-review" not found` when the active config dir lacks the `install.sh` symlink.
-2. `scriptPath` = the manifest's `WORKFLOW_SCRIPT` (absolute path). The Workflow tool only accepts a script inside a directory the session can already read (its working directory or an added directory), so this works when `$SESSION_DIR` is under the session's working directory — typically when the session was started at the reviewed repo's root. Skip this step when it is not (usually the case with `NO_GIT=1`, where `$SESSION_DIR` is under `~/.cache/committee/`).
-3. When step 2 is skipped or rejected (`scriptPath must be a script path this tool returned, or a file you can already read`): copy the install's script into your session scratchpad directory (the one named in your system prompt) with a real copy, never a symlink (the tool resolves symlinks and checks the target): `cp -- "$PROMPTS_DIR/committee-review.js" "<scratchpad>/committee-review.js"`, then retry with `scriptPath` = that copy.
-4. Only if there is no scratchpad directory or step 3 is also rejected: Read `$PROMPTS_DIR/committee-review.js` and pass its complete content as `script` (≈45 KB of tool input — last resort).
+Use the same `args` (below) at each step of this chain, moving to the next step only when the current one is rejected **before** the workflow starts (`scriptPath` rejected or script unreadable). Once the tool returns a task/run ID, retain it: wait for that run, or resume that same run with `resumeFromRunId` if paused; do not launch another copy while its status is active or unknown. A retryable polling/resume error (including 429) does not establish run failure: retain the run ID and retry inspection/resume with backoff.
 
-Always copy or read the script from the install-resolved `$PROMPTS_DIR` (or prepare.sh's copy of it), never from the repo under review. After the run, tell the user if step 1 failed so they can re-run `install.sh` for their config dir.
+1. `Workflow({ scriptPath: "<WORKFLOW_SCRIPT>", args: { ... } })`, substituting the manifest's literal absolute path. This is the first call for a normal repo/worktree session. The tool requires a path within the session's readable directories (working directory or an added directory); skip to step 2 when the copy is outside those directories, usually `NO_GIT=1` with a session dir under `~/.cache/committee/`.
+2. When step 1 is skipped or rejected (`scriptPath must be a script path this tool returned, or a file you can already read`): copy the installed script to a unique per-review subdirectory of the session scratchpad named in your system prompt, using a real copy, never a symlink (the tool checks the resolved target): `mkdir -p -- "<scratchpad>/<session-basename>"` then `cp -- "$WORKFLOW_SCRIPT" "<scratchpad>/<session-basename>/committee-review.js"`. Invoke `Workflow` with `scriptPath` set to that copy's literal absolute path. Record this per-review scratchpad subdirectory for Cleanup. Do not invent a scratchpad path or write into the reviewed directory for a non-git review.
+3. Only if there is no scratchpad directory or step 2 is also rejected: Read `$WORKFLOW_SCRIPT` and pass its complete content as `script` (≈45 KB of tool input — last resort).
+
+Always use prepare.sh's copy of the install-resolved script, never a like-named workflow supplied by the repo under review. No config-directory repair is required for this dispatch path.
 
 ```
 {
@@ -207,7 +209,7 @@ Any `prepare.sh` or pre-dispatch bash failure: print the error output to the use
 </failure_mode>
 
 <failure_mode name="workflow_failed">
-The `Workflow` call errored or returned no usable result → tell the user the review workflow failed, note that `$SESSION_DIR` is preserved for inspection, and STOP. Do not delete the session dir. For PR scope, still run `git update-ref -d "$PR_BASE_REF"` so the fetched `refs/pr-committee/*` ref is not left behind.
+All pre-launch dispatch routes were rejected, or the run is confirmed terminal without a usable result → tell the user the review workflow failed, note that `$SESSION_DIR` is preserved for inspection, and STOP. Do not delete the session dir. For PR scope, still run `git update-ref -d "$PR_BASE_REF"` so the fetched `refs/pr-committee/*` ref is not left behind.
 </failure_mode>
 
 ## Evaluate and display
@@ -220,4 +222,6 @@ The workflow returns `{ quorum, degraded, perReviewer: [{reviewer, ran_ok, note?
 
 ## Cleanup (after presenting)
 
-Run `rm -rf -- "$SESSION_DIR"`. If PR scope and `PR_BASE_REF` is set, also `git update-ref -d "$PR_BASE_REF"`. If the `Workflow` call itself errored, do NOT delete `$SESSION_DIR` — tell the user it is preserved for inspection — but STILL run `git update-ref -d "$PR_BASE_REF"` for PR scope (committee's own `refs/pr-committee/*` namespace; leaving it leaks a stale ref).
+After the workflow completes successfully, also remove the recorded per-review scratchpad subdirectory, if one was created (never the whole session scratchpad). Preserve that copy with `$SESSION_DIR` on workflow errors.
+
+Run `rm -rf -- "$SESSION_DIR"`. If PR scope and `PR_BASE_REF` is set, also `git update-ref -d "$PR_BASE_REF"`. On a `workflow_failed` outcome, do NOT delete `$SESSION_DIR` — tell the user it is preserved for inspection — but STILL run `git update-ref -d "$PR_BASE_REF"` for PR scope (committee's own `refs/pr-committee/*` namespace; leaving it leaks a stale ref).

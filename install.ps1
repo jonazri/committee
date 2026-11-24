@@ -249,7 +249,7 @@ foreach ($ClaudeDir in $ConfigDirs) {
   New-SafeSymlink (Join-Path $RepoRoot '.claude\skills\committee\SKILL.md') (Join-Path $SkillsDir 'committee\SKILL.md')
   New-SafeSymlink (Join-Path $RepoRoot 'prompts') (Join-Path $SkillsDir 'committee\prompts')
 
-  # Named user-scope workflow so the skill can invoke Workflow({name:"committee-review"}).
+  # Optional named user-scope workflow for direct invocation; the skill uses scriptPath.
   # Rides the same source-of-truth as prompts/ - edits to the workflow are live.
   New-SafeSymlink (Join-Path $RepoRoot 'prompts\committee-review.js') (Join-Path $ClaudeDir 'workflows\committee-review.js')
 

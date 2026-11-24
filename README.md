@@ -56,6 +56,8 @@ git clone https://github.com/jonazri/committee.git && cd committee && ./install.
 
 Keep the cloned repo around — the skills are symlinked into it. To update, `git pull` in the clone; no reinstall needed.
 
+`/committee` launches the prepared workflow by its absolute `scriptPath`, so it also works with account config directories that share `skills/` but have no named `workflows/` registration. The workflow symlink remains available for direct named invocation.
+
 ### Windows
 
 Install from PowerShell with `.\install.ps1 [-ConfigDir <dir>,...]` (same targets and allow rule as `install.sh`; the symlinks need an elevated shell, or PowerShell 7+ with Developer Mode on). `/committee-loop` runs its detached loop inside **WSL**, because tmux has no native Windows build: invoke it from Claude Code as usual (Git Bash), and `spawn.sh` re-executes itself in WSL. Inside WSL you need `tmux`, `git`, `node`, `claude`, and the reviewer CLIs you want (`kiro-cli`, a Linux build of `codex`, `agy`), each logged in from WSL, plus this repo's `./install.sh` run inside WSL, the `ralph-loop` and `superpowers` plugins in WSL's Claude Code, and a WSL git `user.name` / `user.email`. Disable reviewers you don't have with `--models` (e.g. `{"reviewers":{"gemini":{"enabled":false},"gemini-pro":{"enabled":false}}}`). Before the first run, start `claude --dangerously-skip-permissions` once inside WSL and accept the Bypass Permissions disclaimer. Details: the "Windows (via WSL)" notes in `.claude/skills/committee-loop/SKILL.md`.
