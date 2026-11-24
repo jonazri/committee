@@ -244,7 +244,7 @@ Wait ~10s, re-peek, and confirm a spinner appeared. (`resume` works as the nudge
 - **Paused `committee-review` workflow** — the status line shows `⏸ committee-review  paused · usage limit resets at <time>` while the main agent keeps running (typically polling the workflow's output). A `continue` nudge does NOT unpause it. Queue an instruction instead and send it immediately (a message typed while the agent is busy is queued until its current tool call ends — which can be a ~10-min poll — and `ctrl+x ctrl+s` sends it now):
   ```bash
   tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> C-u
-  sleep 1; tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> -l "The committee-review workflow is paused on a usage limit, but this session is running. Do not wait. Stop polling, resume that workflow now with the Workflow tool's resumeFromRunId (completed agent calls are cached); if resume fails, re-run the same committee-review call. Then continue the iteration."
+  sleep 1; tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> -l "The committee-review workflow is paused on a usage limit, but this session is running. Do not wait. Stop polling, retain its run ID and resume that same workflow with the Workflow tool's resumeFromRunId (completed agent calls are cached). If resume fails, inspect that run and retry resume with backoff while it is paused; wait if active. Never launch a replacement while its status is active or unknown. Only a confirmed terminated run may be replaced. Then continue the iteration."
   sleep 1; tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> Enter
   sleep 1; tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> C-x; tmux -L <COMMITTEE_SOCKET> send-keys -t <SESSION> C-s
   ```
