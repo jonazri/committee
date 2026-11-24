@@ -3,7 +3,8 @@
 # NO_GIT=1, the session dir lands under $XDG_CACHE_HOME/committee (the reviewed dir
 # is never written), WORKFLOW_SCRIPT is a real copy, a plan outside the cwd roots
 # PROJECT_ROOT at the plan's dir, diff scopes are rejected, and a git repo still
-# uses <repo>/.committee without NO_GIT.
+# uses <repo>/.committee without NO_GIT. A linked worktree with a skills-only
+# account config gets a readable workflow copy without named-workflow registration.
 # Mirrors scripts/headroom-launch-smoke.sh's note()/check()/exit "$fail" convention.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -88,5 +89,18 @@ check "$rc" 0 "in-git plan succeeds"
 check "${NO_GIT:-unset}" unset "in-git manifest has no NO_GIT"
 case "${SESSION_DIR:-}" in "$TMP/repo/.committee/session-"*) s=repo ;; *) s="${SESSION_DIR:-}" ;; esac
 check "$s" repo "in-git session dir under <repo>/.committee"
+
+# Account slots can share skills without sharing workflows. Exercise the exact
+# worktree-local scriptPath route used when named lookup would fail in that slot.
+mkdir -p "$TMP/slot"
+ln -s "$HERE/../.claude/skills" "$TMP/slot/skills"
+git -C "$TMP/repo" worktree add -q --detach "$TMP/repo/.claude/worktrees/review" HEAD
+CLAUDE_CONFIG_DIR="$TMP/slot" run "$TMP/repo/.claude/worktrees/review" --scope=plan --plan=plan.md --prompts-dir="$PROMPTS"
+check "$rc" 0 "worktree preparation succeeds with a skills-only account config"
+check "$( [ -f "$TMP/slot/skills/committee/SKILL.md" ] && [ ! -e "$TMP/slot/workflows" ] && echo skills-only)" skills-only "account slot has the skill but no named workflows"
+check "${PROJECT_ROOT:-}" "$TMP/repo/.claude/worktrees/review" "PROJECT_ROOT stays inside the linked worktree"
+case "${WORKFLOW_SCRIPT:-}" in "$TMP/repo/.claude/worktrees/review/.committee/session-"*/committee-review.js) s=worktree ;; *) s="${WORKFLOW_SCRIPT:-}" ;; esac
+check "$s" worktree "primary scriptPath stays inside the linked worktree"
+check "$( [ -r "${WORKFLOW_SCRIPT:-/x}" ] && [ ! -L "$WORKFLOW_SCRIPT" ] && cmp -s "$WORKFLOW_SCRIPT" "$PROMPTS/committee-review.js" && echo copy)" copy "worktree scriptPath is a readable real copy of the installed workflow"
 
 exit "$fail"

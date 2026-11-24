@@ -490,7 +490,7 @@ if [ -x "$STATIC_SCRIPT_DIR/static-prepass.sh" ] && [ "${#STATIC_FILES[@]}" -gt 
     2>>"$SESSION_DIR/diff.err" || true
 fi
 
-# ---- Workflow script copy (Workflow scriptPath fallback) ----
+# ---- Workflow script copy (primary Workflow scriptPath dispatch) ----
 # A real copy, not a symlink: the Workflow tool resolves symlinks and rejects targets
 # outside the session's readable dirs. Runs after the scope handlers so the uncommitted
 # scope's untracked-file listing never picks it up.

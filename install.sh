@@ -91,7 +91,7 @@ for CONFIG_DIR in "${CONFIG_DIRS[@]}"; do
   safe_symlink "$REPO_ROOT/.claude/skills/committee/SKILL.md" "$SKILLS_DIR/committee/SKILL.md"
   safe_symlink "$REPO_ROOT/prompts" "$SKILLS_DIR/committee/prompts"
 
-  # Named user-scope workflow so the skill can invoke Workflow({name:"committee-review"}).
+  # Optional named user-scope workflow for direct invocation; the skill uses scriptPath.
   # Rides the same source-of-truth as prompts/ — edits to the workflow are live.
   safe_symlink "$REPO_ROOT/prompts/committee-review.js" "$CONFIG_DIR/workflows/committee-review.js"
 
