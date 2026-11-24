@@ -72,18 +72,20 @@ if (!a.sessionDir || !a.promptsDir || !a.projectRoot) {
 // operator-overridable here (`reviewerModel`/etc).
 const safeTok = (s, re) => (typeof s === 'string' && re.test(s) ? s : null)
 const MODEL_RE = /^[A-Za-z0-9._-]+$/
-// Effort levels are lowercase enums (minimal/low/medium/high/xhigh) — stricter than MODEL_RE
+// Effort levels are lowercase enums (e.g. low/medium/high/xhigh/max) — stricter than MODEL_RE
 // on purpose; spawn.sh's --models validator enforces the same lowercase charset at entry so a
 // bad value fails fast there instead of silently degrading here.
 const codexEffort = safeTok(a.codexEffort, /^[a-z]+$/) || 'high'
-const codexModel = safeTok(a.codexModel, MODEL_RE)
-const codexCfg = `-c model_reasoning_effort=${codexEffort}${codexModel ? ` -c model=${codexModel}` : ''}`
+const codexModel = safeTok(a.codexModel, MODEL_RE) || 'gpt-6.2-astra'
+const kiroModel = safeTok(a.kiroModel, MODEL_RE) || 'claude-opus-5.5'
+const codexCfg = `-c model_reasoning_effort=${codexEffort} -c model=${codexModel}`
 const geminiModel = safeTok(a.geminiModel, MODEL_RE)             // --gemini-model override for the primary
-const geminiPrimaryModel = geminiModel || '@flash'               // agy-review.sh resolves @flash to the newest gemini-<ver>-flash-high in `agy models` (fallback gemini-3.8-flash-high; agy 1.3.1 dropped gemini-3.5-flash). Default-only: '@' fails MODEL_RE.
-const geminiProOverridden = !!safeTok(a.geminiProModel, MODEL_RE) // explicit pin suppresses the Pro→Flash retry
-const geminiProModel = safeTok(a.geminiProModel, MODEL_RE) || 'Gemini 3.1 Pro (High)' // Trusted display-name literal (shq()'d safely), verified Pro by an active-model canary on agy 1.3.1. On agy 1.1.6 the raw gemini-3.1-pro-high id silently resolved Gemini 3.6 Flash, so the display name stays the default. Re-run the ACTIVE-model canary, not just `agy models`, on every upgrade (§7 #7).
+const geminiPrimaryModel = geminiModel || 'gemini-4-neon-high'
+const geminiFallbackModel = 'gemini-4-hydrogen-high'
+const geminiProOverridden = !!safeTok(a.geminiProModel, MODEL_RE) // explicit pin suppresses the Pro→Hydrogen retry
+const geminiProModel = safeTok(a.geminiProModel, MODEL_RE) || 'Gemini 4 Neon (High)' // Trusted display name, shq()'d safely. Catalog checked on agy 1.5.16 (2026-11-24); run the active-model canary after upgrades (§7 #7).
 // The verifier is always dispatched as a Claude agent, so only Claude tier aliases are valid —
-// a charset-valid non-Claude id (e.g. gpt-5.5) would pass MODEL_RE and then fail at agent()
+// a charset-valid non-Claude id (e.g. gpt-6.1-sol) would pass MODEL_RE and then fail at agent()
 // dispatch time; constraining here degrades it to the default instead.
 const verifierModel = safeTok(a.verifierModel, /^(opus|sonnet|haiku)$/) || 'sonnet'
 // Reviewer subset allowlist (canonical lowercase names: claude/codex/kiro/gemini/gemini-pro).
@@ -312,7 +314,7 @@ if (adjNote && trust !== 'read-only' && ['commit', 'branch_diff', 'uncommitted']
 // it can still read other repo files for context. Auto vs read-only no longer differ for Kiro.
 const kiroPrompt = `Run the Kiro CLI to review. Read ${a.promptsDir}/reviewers/kiro.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
 Run as ONE Bash invocation with run_in_background: true and wait for its task-completion notification — the foreground Bash budget caps at 600000 ms, below this reviewer's 1200 s bound, so the shell's own \`timeout 1200\` must be the operative cap:
-  cd ${shq(projectRoot)} && timeout 1200 kiro-cli chat --no-interactive --trust-tools=fs_read "Read '${dq(a.diffPath)}' (the diff; see '${dq(a.diffStatPath)}' for a file-level summary) and review it. ${dq(cliFraming)}" > ${shq(a.sessionDir)}/kiro.md 2> ${shq(a.sessionDir)}/kiro.err
+  cd ${shq(projectRoot)} && timeout 1200 kiro-cli chat --model ${kiroModel} --no-interactive --trust-tools=fs_read "Read '${dq(a.diffPath)}' (the diff; see '${dq(a.diffStatPath)}' for a file-level summary) and review it. ${dq(cliFraming)}" > ${shq(a.sessionDir)}/kiro.md 2> ${shq(a.sessionDir)}/kiro.err
 ${specNote}
 ${staticNote}
 Parse the output into findings. If it errors or returns nothing, set ran_ok=false with the reason (a \`timeout\` kill — exit 124 — is an error: do NOT parse a partial kiro.md).`
@@ -335,7 +337,7 @@ const agyMode = trust === 'read-only' ? 'read-only' : 'auto'
 const agyFraming = `${geminiText} ${cliFraming}`
 // Gemini-Pro's framing variant carries the anti-recency lens when it is the lens carrier
 // (see proGetsLens above). Passed per-call so the primary Gemini's framing stays lens-free
-// and the Pro→Flash retry keeps the lens.
+// and the Pro→Hydrogen retry keeps the lens.
 const agyFramingPro = proGetsLens ? `${agyFraming} ${antiRecencyLens}` : agyFraming
 // Build one "fence | agy-review.sh" pipeline for a (model, outBase). The framing is a single
 // shq-quoted argv token to agy-review.sh, so it never sits inside another double-quoted string
@@ -351,7 +353,7 @@ const agyFramingPro = proGetsLens ? `${agyFraming} ${antiRecencyLens}` : agyFram
 // Cleanup is SELF-CONTAINED per agyPipe call (NOT dependent on same-shell execution): each call has
 // its own `mktemp` + per-call QUOTED EXIT/INT/TERM trap (`trap 'rm -rf "$agyhome"' ...`) + trailing
 // `; rm -rf "$agyhome"`, so the trap removes the in-flight home on a cancel/tool-timeout (SIGTERM) and
-// the trailing rm removes it on the normal path — correct whether or not the primary and Pro→Flash
+// the trailing rm removes it on the normal path — correct whether or not the primary and Pro→Hydrogen
 // retry share one shell. (When they DO share one shell — the prompt's "ONE Bash invocation" — the
 // primary's trailing rm runs before the retry reassigns $agyhome, so re-arming the EXIT trap is
 // harmless; when split, each shell self-cleans.) NO accumulator (no space-delimited word-split), NO
@@ -369,20 +371,20 @@ const agyPipe = (model, outBase, framing = agyFraming) =>
   `bash ${agyScript} ${agyMode} ${shq(model)} '' ${shq(framing)} ${shq(`${a.sessionDir}/${outBase}.md`)} ${shq(`${a.sessionDir}/${outBase}.err`)} "\$agyhome" || { : > ${shq(`${a.sessionDir}/${outBase}.md`)}; echo 'agy-review: agyPipe setup failed (cd projectRoot / mktemp -d) — reviewer dropped' > ${shq(`${a.sessionDir}/${outBase}.err`)}; }; rm -rf "\$agyhome"`
 
 const geminiPrompt = `Run the Gemini reviewer via the Antigravity CLI (agy). Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
-Run this EXACT command as ONE Bash invocation with a 360000 ms timeout — it pipes the fenced diff into agy-review.sh, which stages the artifact in the per-run HOME (agy 1.1.1+ ignores stdin when \`-p\` also has a prompt), then tells \`agy\` to read that file before reviewing with model ${geminiPrimaryModel}${geminiPrimaryModel === '@flash' ? ' (the helper resolves @flash to the newest Gemini Flash High id in `agy models`)' : ''}${trust === 'read-only' ? ' under a read-only permissions.allow/deny lockdown (reads explicitly allowed, writes/shell/network denied; auth is copied so the real ~/.gemini is untouched)' : ' under an auto permissions.allow/deny lockdown (reads explicitly allowed, writes/shell denied, network reads allowed; NO --dangerously-skip-permissions; auth is copied so the real ~/.gemini is untouched)'}:
+Run this EXACT command as ONE Bash invocation with a 360000 ms timeout — it pipes the fenced diff into agy-review.sh, which stages the artifact in the per-run HOME (agy 1.1.1+ ignores stdin when \`-p\` also has a prompt), then tells \`agy\` to read that file before reviewing with model ${geminiPrimaryModel}${trust === 'read-only' ? ' under a read-only permissions.allow/deny lockdown (reads explicitly allowed, writes/shell/network denied; auth is copied so the real ~/.gemini is untouched)' : ' under an auto permissions.allow/deny lockdown (reads explicitly allowed, writes/shell denied, network reads allowed; NO --dangerously-skip-permissions; auth is copied so the real ~/.gemini is untouched)'}:
   ${agyPipe(geminiPrimaryModel, 'gemini')}
 There is NO fallback for the primary Gemini reviewer. If ${a.sessionDir}/gemini.md is empty after the call, set ran_ok=false with the reason from ${a.sessionDir}/gemini.err (an empty file means agy produced no review — auth/quota/capacity, or a read-only setup skip). Otherwise parse the output into findings.
 ${specNote}
 ${staticNote}`
 
-const geminiProPrompt = `Run a second Gemini reviewer via the Antigravity CLI (agy), pinned to the latest pro model, for an independent review. Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
-Pinned to ${geminiProModel}${geminiProOverridden ? ' (operator override — no flash retry)' : ' (default latest pro)'}. Run as ONE Bash invocation with a ${geminiProOverridden ? '360000' : '660000'} ms timeout (this is the AGENT's Bash-tool budget; the LOAD-BEARING enforcement is the per-call \`timeout -k 30 280\` INSIDE each agy call — each agy call is hard-bounded at ~310s by the shell and the retry's @flash catalog lookup at 30s, so the no-override primary+retry sequence is shell-bounded ≤~650s regardless of this budget. Set the budget ABOVE that worst case so a legitimate retry is never truncated — a single-call budget could not fit both):
+const geminiProPrompt = `Run a second Gemini reviewer via the Antigravity CLI (agy), pinned to ${geminiProModel}, for an independent review. Read ${a.promptsDir}/reviewers/gemini.md for the review framing (its {PLACEHOLDER} tokens are NOT pre-filled — interpret them from the scope and paths given in this prompt).
+Pinned to ${geminiProModel}${geminiProOverridden ? ' (operator override — no Hydrogen retry)' : ' (default Neon High)'}. Run as ONE Bash invocation with a ${geminiProOverridden ? '360000' : '660000'} ms timeout (this is the AGENT's Bash-tool budget; the LOAD-BEARING enforcement is the per-call \`timeout -k 30 280\` INSIDE each agy call — each model invocation is hard-bounded at ~310s by the shell, leaving ~40s of this budget for setup across both calls. Set the budget ABOVE that worst case so a legitimate retry is never truncated — a single-call budget could not fit both):
   ${agyPipe(geminiProModel, 'gemini-pro', agyFramingPro)}${geminiProOverridden ? '' : `
-If ${a.sessionDir}/gemini-pro.md is empty after that call — OR non-empty but clearly NOT a review (e.g. the model claiming it received no content to review; an exit-0 non-review response slips the -s gate below, observed 2026-07-10) — run ONE Pro→Flash retry (same command, model @flash) so the panel keeps a Gemini voice. If unsure whether the output is a review, treat it as one — do NOT move it aside or retry (a mistaken mv would overwrite a valid Pro review with a Flash one). In the CLEARLY-non-review case ONLY, first move the bad output aside so the -s gate opens and the attempt stays diagnosable — copy verbatim:
+If ${a.sessionDir}/gemini-pro.md is empty after that call — OR non-empty but clearly NOT a review (e.g. the model claiming it received no content to review; an exit-0 non-review response slips the -s gate below, observed 2026-07-10) — run ONE Pro→Hydrogen retry (same command, model ${geminiFallbackModel}) so the panel keeps a Gemini voice. If unsure whether the output is a review, treat it as one — do NOT move it aside or retry (a mistaken mv would overwrite a valid Pro review with a Hydrogen one). In the CLEARLY-non-review case ONLY, first move the bad output aside so the -s gate opens and the attempt stays diagnosable — copy verbatim:
   mv -f ${shq(`${a.sessionDir}/gemini-pro.md`)} ${shq(`${a.sessionDir}/gemini-pro.attempt1.md`)}
 Then in either case run the retry — copy verbatim:
-  [ -s ${shq(`${a.sessionDir}/gemini-pro.md`)} ] || { ${agyPipe('@flash', 'gemini-pro', agyFramingPro)}; }`}
-If ${a.sessionDir}/gemini-pro.md is still empty${geminiProOverridden ? '' : ' (or still not a review) after the retry'}, set ran_ok=false with the reason from ${a.sessionDir}/gemini-pro.err. Otherwise parse the output into findings${geminiProOverridden ? '' : ' (note in your result if the flash retry produced them)'}.
+  [ -s ${shq(`${a.sessionDir}/gemini-pro.md`)} ] || { ${agyPipe(geminiFallbackModel, 'gemini-pro', agyFramingPro)}; }`}
+If ${a.sessionDir}/gemini-pro.md is still empty${geminiProOverridden ? '' : ' (or still not a review) after the retry'}, set ran_ok=false with the reason from ${a.sessionDir}/gemini-pro.err. Otherwise parse the output into findings${geminiProOverridden ? '' : ' (note in your result if the Hydrogen retry produced them)'}.
 ${specNote}
 ${staticNote}`
 
@@ -403,7 +405,7 @@ phase('Review')
 const allReviewers = [
   // Lens attaches at dispatch (not inside claudePrompt) so Fable's reuse of claudePrompt
   // below stays lens-free — exactly ONE reviewer carries the anti-recency lens.
-  { name: 'Claude', prompt: claudeGetsLens ? `${claudePrompt}\n${antiRecencyLens}` : claudePrompt, model: a.reviewerModel },
+  { name: 'Claude', prompt: claudeGetsLens ? `${claudePrompt}\n${antiRecencyLens}` : claudePrompt, model: safeTok(a.reviewerModel, /^(opus|sonnet|haiku)$/) || 'opus' },
   { name: 'Codex', prompt: codexPrompt },
   { name: 'Kiro', prompt: kiroPrompt },
   { name: 'Gemini', prompt: geminiPrompt },

@@ -88,24 +88,24 @@ The literal path matters: the installers add a `Bash(bash <SKILL_DIR>/spawn.sh:*
 **Windows:** run the same command from Git Bash. `spawn.sh` detects MINGW/MSYS/Cygwin and re-executes itself inside WSL (tmux has no native Windows build); the manifest then carries WSL paths and `RUNNER=wsl`. See "Windows (via WSL)" under Notes for the prerequisites and for how every later command must be wrapped.
 
 <operator_model_overrides>
-If the user's request specifies model choices for this run — e.g. *"only use opus 4.8 with xhigh and gpt 5.5 xhigh"*, *"run codex on xhigh"*, *"skip kiro and gemini"*, *"verify with opus"* — translate that into a JSON config and pass it as `--models '<json>'` (before or among the path args), again by the literal printed path: `bash <SKILL_DIR>/spawn.sh --models '<json>' <path1> ...`. Reviewer keys are lowercase; leave at least 2 reviewers enabled (the `/committee` quorum), at least one of them `claude`, `kiro` or `codex` (iter-1 runs only those). Schema (every field optional; omit anything not requested):
+If the user's request specifies model choices for this run — e.g. *"only use opus 5.5 with xhigh and gpt 6.2 sol xhigh"*, *"run codex on xhigh"*, *"skip kiro and gemini"*, *"verify with opus"* — translate that into a JSON config and pass it as `--models '<json>'` (before or among the path args), again by the literal printed path: `bash <SKILL_DIR>/spawn.sh --models '<json>' <path1> ...`. Reviewer keys are lowercase; leave at least 2 reviewers enabled (the `/committee` quorum), at least one of them `claude`, `kiro` or `codex` (iter-1 runs only those). Schema (every field optional; omit anything not requested):
 
 ```json
 {
   "innerAgent": { "model": "opus", "effort": "xhigh" },
   "reviewers": {
     "claude":     { "model": "opus", "policy": "pin" },
-    "codex":      { "model": "gpt-5.5", "effort": "xhigh" },
-    "kiro":       { "enabled": false },
-    "gemini":     { "model": "gemini-3.8-flash-high" },
-    "gemini-pro": { "model": "gemini-3.1-pro-low" },
+    "codex":      { "model": "gpt-6.2-sol", "effort": "xhigh" },
+    "kiro":       { "model": "claude-opus-5.5", "enabled": false },
+    "gemini":     { "model": "gemini-4-neon-high" },
+    "gemini-pro": { "model": "gemini-4-neon-high" },
     "fable":      { "enabled": true, "model": "fable" }
   },
   "verifier": { "model": "sonnet" }
 }
 ```
 
-Honest capability limits to respect when translating: **effort** is only honorable for `innerAgent.effort` (the orchestrator's `--effort`) and `reviewers.codex.effort` (`model_reasoning_effort`); the in-workflow Claude reviewer, verifiers, and Gemini reviewers expose no per-agent effort knob, so for those set only `model`. `fable` is the OPT-IN 6th reviewer (a second Claude-family voice; excluded unless `enabled: true` — e.g. for *"add fable to the panel"* / *"run a 6-reviewer premium panel"*); it joins iter-2+ `/committee` rounds only, and only its `model` is settable. `reviewers.claude.policy: "pin"` (the default when a claude model is set) freezes the loop's adaptive iter-3 Sonnet step-down + auto-re-escalation to that model; `"adaptive"` keeps the adaptive logic. Model ids must be `[A-Za-z0-9._-]`; effort levels are lowercase enums (`minimal|low|medium|high|xhigh`); `verifier.model` must be `opus|sonnet|haiku`. `spawn.sh` validates the JSON and fails fast on a bad value. Use `model: "opus"` for "opus 4.8" (the current Opus). If the user gives no model preferences, omit `--models` entirely (committee defaults).
+Honest capability limits to respect when translating: **effort** is only honorable for `innerAgent.effort` (the orchestrator's `--effort`) and `reviewers.codex.effort` (`model_reasoning_effort`); the in-workflow Claude reviewer, verifiers, and Gemini reviewers expose no per-agent effort knob, so for those set only `model`. `fable` is the OPT-IN 6th reviewer (a second Claude-family voice; excluded unless `enabled: true` — e.g. for *"add fable to the panel"* / *"run a 6-reviewer premium panel"*); it joins iter-2+ `/committee` rounds only, and only its `model` is settable. `reviewers.claude.policy: "pin"` (the default when a claude model is set) freezes the loop's adaptive iter-3 Sonnet step-down + auto-re-escalation to that model; `"adaptive"` keeps the adaptive logic. Model ids must be `[A-Za-z0-9._-]`; effort levels are lowercase enums (e.g. `low|medium|high|xhigh|max`; Codex also accepts `ultra`); `verifier.model` must be `opus|sonnet|haiku`. `spawn.sh` validates the JSON and fails fast on a bad value. Use `model: "opus"` for "opus 5.5" (the current Opus). If the user gives no model preferences, omit `--models` entirely (committee defaults).
 </operator_model_overrides>
 
 <gate_selection>

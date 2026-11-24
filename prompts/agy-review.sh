@@ -2,8 +2,8 @@
 # Run one Antigravity (agy) CLI reviewer for committee.
 #   Usage: agy-review.sh <mode> <model> <effort> <prompt> <out_md> <out_err> <home_base>
 #     mode       : auto | read-only
-#     model      : agy model id or display name (e.g. gemini-3.8-flash-high, gemini-3.1-pro-low,
-#                  "Gemini 3.1 Pro (High)"), or @flash = the newest gemini-<ver>-flash-high id
+#     model      : agy model id or display name (e.g. gemini-4-hydrogen-high, gemini-4-neon-high,
+#                  "Gemini 4 Neon (High)"), or legacy @flash = the newest gemini-<ver>-flash-high id
 #                  listed by `agy models` (falls back to $AGY_FLASH_FALLBACK)
 #     effort     : low | medium | high | empty (empty omits --effort). Tiered ids and display names
 #                  encode their tier; if agy rejects the model/effort pairing, the helper retries once
@@ -63,7 +63,8 @@ if [ "$#" -lt 6 ]; then
 fi
 mode=$1; model=$2; effort=$3; prompt=$4; out_md=$5; out_err=$6; home_base=${7:-}
 : > "$out_md"; : > "$out_err"
-AGY_FLASH_FALLBACK=gemini-3.8-flash-high
+# Legacy @flash callers fall back to Hydrogen when Flash leaves the catalog.
+AGY_FLASH_FALLBACK=gemini-4-hydrogen-high
 
 case "$effort" in
   "") effort_args=() ;;
