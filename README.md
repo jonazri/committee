@@ -12,11 +12,13 @@ Committee runs five reviewers in parallel inside the `committee-review` workflow
 
 | Reviewer | Model | Mechanism |
 |----------|-------|-----------|
-| **Claude** | Claude (harness default; `--reviewer-model` to override) | workflow agent (`general-purpose`) + bundled template |
-| **Codex** | GPT-5.4 | workflow agent runs `codex review` / `codex exec` |
-| **Kiro** | Amazon Q | workflow agent runs `kiro-cli chat` |
-| **Gemini** | Gemini Flash (High) | workflow agent runs `agy -p --model <newest gemini-<ver>-flash-high from agy models>` |
-| **Gemini-Pro** | Gemini 3.1 Pro (High) | workflow agent runs `agy -p --model "Gemini 3.1 Pro (High)"` (Pro→Flash retry at default pin) |
+| **Claude** | Latest Claude Opus (`opus`; currently 5.5) | workflow agent (`general-purpose`) + bundled template |
+| **Codex** | GPT-6.2 Astra (`gpt-6.2-astra`) | workflow agent runs `codex review` / `codex exec` |
+| **Kiro** | Claude Opus 5.5 (`claude-opus-5.5`) | workflow agent runs `kiro-cli chat` |
+| **Gemini** | Gemini 4 Neon (High) | workflow agent runs `agy -p --model gemini-4-neon-high` |
+| **Gemini-Pro** | Gemini 4 Neon (High) | workflow agent runs `agy -p --model "Gemini 4 Neon (High)"` (Pro→Hydrogen retry at default pin) |
+
+Model defaults checked on **2026-11-24** against the installed provider catalogs. Both Gemini slots use Neon for independent reviews; the second retries once on `gemini-4-hydrogen-high` if its default Neon call fails. Claude uses the latest `opus` alias; verifiers use `sonnet` (currently 5.5), and the optional sixth reviewer uses `fable` (currently 5.2). See [Claude aliases](https://code.claude.com/docs/en/model-config), [OpenAI models](https://developers.openai.com/api/docs/models), [Kiro models](https://kiro.dev/docs/models/available-models/), and [Antigravity models](https://antigravity.google/docs/models).
 
 After the reviewers return, the `committee-review` workflow runs **per-reviewer verifiers** in parallel — one agent each, checking that reviewer's claims against the actual codebase — and returns a structured `{ quorum, degraded, perReviewer }` result. Then the `/committee` skill:
 1. **Synthesizes** the verified claims into a deduplicated report with severity ratings, contradiction detection, and a merge verdict
@@ -78,7 +80,10 @@ Optional cross-scope flags (combine with any scope above):
 | Flag | Effect |
 |------|--------|
 | `--trust=auto` / `--trust=read-only` | Pre-selects CLI reviewer trust level, skipping the interactive dialog (used by `/committee-loop` for unattended runs). |
-| `--reviewer-model=opus\|sonnet\|haiku` | Overrides the Claude reviewer's model. Inherits the harness default. `/committee-loop` uses `sonnet` from iter-3 on for faster iterations (~3 min vs ~8 min). |
+| `--reviewer-model=<model>` | Overrides the Claude reviewer with a Claude alias or full model ID. Defaults to the latest `opus` alias. `/committee-loop` uses `sonnet` from iter-3 on for faster iterations (~3 min vs ~8 min). |
+| `--codex-model=<id>` / `--codex-effort=<level>` | Overrides GPT-6.2 Astra / `high`. |
+| `--kiro-model=<id>` | Overrides `claude-opus-5.5`. |
+| `--gemini-model=<id>` / `--gemini-pro-model=<id>` | Overrides either Neon reviewer; a second-reviewer override disables its Hydrogen retry. |
 
 ### File Review (`--files`)
 
@@ -203,8 +208,8 @@ User session
               │     ├── Claude  — general-purpose agent + bundled template
               │     ├── Codex   — agent runs codex review / codex exec
               │     ├── Kiro    — agent runs kiro-cli chat
-              │     ├── Gemini  — agent runs `agy --model <newest Flash High id>`
-              │     └── Gemini-Pro — agent runs `agy --model "Gemini 3.1 Pro (High)"` (Pro→Flash retry)
+              │     ├── Gemini  — agent runs `agy --model gemini-4-neon-high`
+              │     └── Gemini-Pro — agent runs `agy --model "Gemini 4 Neon (High)"` (Pro→Hydrogen retry)
               ├── Verify stage — one verifier agent per reviewer, streamed as each review completes
               └── returns { quorum, degraded, perReviewer }
                     → skill synthesizes (dedup, contradiction detection, verdict)
@@ -225,7 +230,7 @@ Key design decisions:
 | SHA range | ~8–10 min |
 | PR | ~8–10 min |
 
-Codex (GPT-5.4) is the bottleneck. The workflow's Codex reviewer overrides to `model_reasoning_effort=high` (from the user's `xhigh` default), typically completing in ~3–5 min, wrapped in a 540s `timeout` (600s for `--files`/`--plan` scope). The other four reviewers typically finish in 1–3 min. The minimum quorum is 2 of 5 reviewers — if Codex times out, the review proceeds with the others.
+Codex is the bottleneck. The workflow's Codex reviewer overrides to `model_reasoning_effort=high` (from any higher global default), typically completing in ~3–5 min, wrapped in a 540s `timeout` (600s for `--files`/`--plan` scope). The other four reviewers typically finish in 1–3 min. The minimum quorum is 2 of 5 reviewers — if Codex times out, the review proceeds with the others.
 
 ## Security Considerations
 
