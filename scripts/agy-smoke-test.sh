@@ -14,6 +14,13 @@ PRIMARY_EFFORT=""
 PRO="Gemini 4 Neon (High)"
 FALLBACK="gemini-4-hydrogen-high"
 fail=0
+# Self-reported identity is a canary, not provider attestation. Require both family
+# and tier; punctuation/case may vary, but Low/Medium/XHigh must not pass as High.
+reported_high_model() {
+  local normalized
+  normalized=$(tr '[:upper:]' '[:lower:]' < "$2" | tr -cs '[:alnum:]' ' ' | sed 's/^ *//; s/ *$//')
+  [ "$normalized" = "gemini 4 $1 high" ]
+}
 note() { printf '%s\n' "$*"; }
 check() { if [ "$1" = "$2" ]; then note "PASS: $3"; else note "FAIL: $3 (got '$1', want '$2')"; fail=1; fi; }
 # TRAP cleanup (not a trailing rm): §7 #1's per-run home holds COPIED real OAuth creds, so an
@@ -161,12 +168,12 @@ fi
 T7=$(mktemp -d)
 printf '<reviewed_content>\nmodel canary\n</reviewed_content>\n' \
   | "$REVIEW" read-only "$PRO" '' \
-      'After reading the staged artifact, reply with only your exact model family and reasoning tier.' \
+      'After reading the staged artifact, reply on one line using <exact model family> | <reasoning tier>, without explanations or Markdown.' \
       "$T7/pro.md" "$T7/pro.err" "$T7/home"
-if grep -Eqi 'neon' "$T7/pro.md" && ! grep -Eqi 'flash' "$T7/pro.md"; then
-  note "PASS: Gemini-Pro display-name default actively resolved Gemini 4 Neon"
+if reported_high_model neon "$T7/pro.md"; then
+  note "PASS: Gemini-Pro display-name default reported Gemini 4 Neon High"
 else
-  note "FAIL: Gemini-Pro display-name default did not identify as Neon — active model may have drifted"
+  note "FAIL: Gemini-Pro display-name default did not identify as Neon High — active model may have drifted"
   cat "$T7/pro.md" "$T7/pro.err"
   fail=1
 fi
@@ -175,14 +182,14 @@ fi
 T8=$(mktemp -d)
 printf '<reviewed_content>\nmodel canary\n</reviewed_content>\n' \
   | "$REVIEW" read-only "$PRIMARY" low \
-      'After reading the staged artifact, reply with only your exact model family and reasoning tier.' \
+      'After reading the staged artifact, reply on one line using <exact model family> | <reasoning tier>, without explanations or Markdown.' \
       "$T8/primary.md" "$T8/primary.err" "$T8/home"
 grep -Fq 'retrying once with: no --effort' "$T8/primary.err" \
   && note "PASS: rejected --effort pairing retried once without --effort" || { note "FAIL: --effort rejection was not adapted"; cat "$T8/primary.err"; fail=1; }
-if grep -Eqi 'neon' "$T8/primary.md" && ! grep -Eqi 'flash' "$T8/primary.md"; then
-  note "PASS: primary actively resolved Gemini 4 Neon"
+if reported_high_model neon "$T8/primary.md"; then
+  note "PASS: primary reported Gemini 4 Neon High"
 else
-  note "FAIL: primary did not identify as Neon — active model may have drifted"
+  note "FAIL: primary did not identify as Neon High — active model may have drifted"
   cat "$T8/primary.md" "$T8/primary.err"
   fail=1
 fi
@@ -191,12 +198,12 @@ fi
 T9=$(mktemp -d)
 printf '<reviewed_content>\nmodel canary\n</reviewed_content>\n' \
   | "$REVIEW" read-only "$FALLBACK" '' \
-      'After reading the staged artifact, reply with only your exact model family and reasoning tier.' \
+      'After reading the staged artifact, reply on one line using <exact model family> | <reasoning tier>, without explanations or Markdown.' \
       "$T9/fallback.md" "$T9/fallback.err" "$T9/home"
-if grep -Eqi 'hydrogen' "$T9/fallback.md" && ! grep -Eqi 'flash' "$T9/fallback.md"; then
-  note "PASS: fallback actively resolved Gemini 4 Hydrogen"
+if reported_high_model hydrogen "$T9/fallback.md"; then
+  note "PASS: fallback reported Gemini 4 Hydrogen High"
 else
-  note "FAIL: fallback did not identify as Hydrogen — active model may have drifted"
+  note "FAIL: fallback did not identify as Hydrogen High — active model may have drifted"
   cat "$T9/fallback.md" "$T9/fallback.err"
   fail=1
 fi

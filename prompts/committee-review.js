@@ -405,7 +405,7 @@ phase('Review')
 const allReviewers = [
   // Lens attaches at dispatch (not inside claudePrompt) so Fable's reuse of claudePrompt
   // below stays lens-free — exactly ONE reviewer carries the anti-recency lens.
-  { name: 'Claude', prompt: claudeGetsLens ? `${claudePrompt}\n${antiRecencyLens}` : claudePrompt, model: safeTok(a.reviewerModel, /^(opus|sonnet|haiku)$/) || 'opus' },
+  { name: 'Claude', prompt: claudeGetsLens ? `${claudePrompt}\n${antiRecencyLens}` : claudePrompt, model: safeTok(a.reviewerModel, MODEL_RE) || 'opus' },
   { name: 'Codex', prompt: codexPrompt },
   { name: 'Kiro', prompt: kiroPrompt },
   { name: 'Gemini', prompt: geminiPrompt },

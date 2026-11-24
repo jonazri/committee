@@ -80,7 +80,7 @@ Optional cross-scope flags (combine with any scope above):
 | Flag | Effect |
 |------|--------|
 | `--trust=auto` / `--trust=read-only` | Pre-selects CLI reviewer trust level, skipping the interactive dialog (used by `/committee-loop` for unattended runs). |
-| `--reviewer-model=opus\|sonnet\|haiku` | Overrides the Claude reviewer's model. Defaults to the latest `opus` alias. `/committee-loop` uses `sonnet` from iter-3 on for faster iterations (~3 min vs ~8 min). |
+| `--reviewer-model=<model>` | Overrides the Claude reviewer with a Claude alias or full model ID. Defaults to the latest `opus` alias. `/committee-loop` uses `sonnet` from iter-3 on for faster iterations (~3 min vs ~8 min). |
 | `--codex-model=<id>` / `--codex-effort=<level>` | Overrides GPT-6.2 Astra / `high`. |
 | `--kiro-model=<id>` | Overrides `claude-opus-5.5`. |
 | `--gemini-model=<id>` / `--gemini-pro-model=<id>` | Overrides either Neon reviewer; a second-reviewer override disables its Hydrogen retry. |

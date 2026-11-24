@@ -35,7 +35,7 @@ Optional cross-scope flags (combine with any scope above):
 
 ```
 --trust=auto | --trust=read-only        # Pre-select CLI reviewer trust; skips the interactive dialog
---reviewer-model=opus|sonnet|haiku      # Override the Claude reviewer's model (default: latest opus alias)
+--reviewer-model=<alias-or-id>         # Override the Claude reviewer's model (default: latest opus alias)
 --codex-model=<id> --codex-effort=<lvl> # Override Codex's model / reasoning effort (default: gpt-6.2-astra / high)
 --kiro-model=<id>                        # Override Kiro model (default: claude-opus-5.5)
 --gemini-model=<id>                      # Pin the primary Gemini reviewer (default: gemini-4-neon-high)

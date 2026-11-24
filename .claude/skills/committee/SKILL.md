@@ -36,7 +36,7 @@ Parse the user's argument (if any) into one of these scopes:
 
 **Optional cross-scope flags:**
 
-- `--reviewer-model=<model>` (one of `opus`, `sonnet`, `haiku`) overrides the Claude reviewer's model. Parse it out of the args, pass it through to the workflow as `reviewerModel` in the `args` object below, and do NOT include it in the `prepare.sh` invocation. Defaults to `opus` (latest Opus) if absent. Used by `committee-loop` in iter-3+ to trade Opus depth for Sonnet speed once most Critical/Important findings have surfaced.
+- `--reviewer-model=<model>` (a Claude alias such as `opus`, `sonnet`, `haiku`, `fable`, or a full Claude model ID) overrides the Claude reviewer's model. Parse it out of the args, pass it through to the workflow as `reviewerModel` in the `args` object below, and do NOT include it in the `prepare.sh` invocation. Defaults to `opus` (latest Opus) if absent. Used by `committee-loop` in iter-3+ to trade Opus depth for Sonnet speed once most Critical/Important findings have surfaced.
 
 - **Operator model overrides** (all optional; absent = committee default; none go to `prepare.sh`). Parse each and pass it through to the workflow `args` under the named key. The workflow sanitizes model ids to `[A-Za-z0-9._-]`, effort levels to lowercase letters only (they are enums, e.g. `low|medium|high|xhigh|max`; Codex also accepts `ultra`), and the verifier model to `opus|sonnet|haiku` (it is always a Claude agent) — anything invalid silently falls back to the default rather than erroring.
   - `--codex-model=<id>` → `codexModel` (e.g. `gpt-6.2-sol`; default: `gpt-6.2-astra`)
@@ -193,7 +193,7 @@ Always copy or read the script from the install-resolved `$PROMPTS_DIR` (or prep
   diffPath: "<SESSION_DIR>/diff.txt", diffStatPath: "<SESSION_DIR>/diff_stat.txt",
   staticPath: "<SESSION_DIR>/static.txt",
   trust, reviewerModel, noGit,
-  codexModel, codexEffort, geminiModel, geminiProModel, verifierModel, enabledReviewers,
+  codexModel, codexEffort, kiroModel, geminiModel, geminiProModel, verifierModel, enabledReviewers,
   fableModel, adjudicationsPath
 }
 ```

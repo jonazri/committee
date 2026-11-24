@@ -82,7 +82,7 @@ b. `timeout 1800 kiro-cli chat --model claude-opus-5.5 --no-interactive --trust-
 
 c. `timeout 1800 codex exec -c model=gpt-6.2-astra --skip-git-repo-check --sandbox read-only -c model_reasoning_effort=high -o .committee-loop-iter1-codex.txt "Review <TARGET...> ..."` (same prompt, explicit `high` reasoning — user's global config may default to `xhigh` which takes ~2× as long with negligible findings-quality gain for this review scale). The 30m wall-clock cap prevents a hung Codex from blocking iter-1 indefinitely; on timeout, `rm -f .committee-loop-iter1-codex.txt` before synthesis to avoid parsing a truncated report — 2-of-3 quorum from Claude+Kiro still holds.
 
-For iter-1, replace these default model/effort arguments with any corresponding `reviewers.claude`, `reviewers.kiro`, or `reviewers.codex` overrides from `.committee-loop-models.json`; do not append competing flags.
+For iter-1, replace the Kiro model and Codex model/effort defaults with their corresponding overrides from `.committee-loop-models.json`; do not append competing flags. Choose Claude through `<operator_model_overrides>` and `<model_selection>`: a set model with `policy: "pin"` (or omitted policy) overrides Opus, while `policy: "adaptive"` keeps the iter-1 Opus baseline.
 
 Do NOT use `/committee` in iter-1 — its workflow includes Gemini and its own synthesis. Synthesize the three reports into a single Critical/Important/Minor list yourself.
 
