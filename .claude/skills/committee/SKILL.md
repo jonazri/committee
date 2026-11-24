@@ -179,7 +179,7 @@ The `committee-review` workflow owns all five reviewers (Claude as a built-in `g
 
 Invoke the `Workflow` tool by **`scriptPath`, not `name`**. The skill can be available through shared `skills/` even when the active `CLAUDE_CONFIG_DIR` has no `workflows/` registration (common with cus account slots). The installed symlink under `~/.claude/workflows/` does not establish that another config dir or an already-running session knows the name. Do not probe `name: "committee-review"` or `name: "committee-review.js"` first.
 
-Use the same `args` (below) at each step of this chain, moving to the next step only when the current one is rejected **before** the workflow starts (`scriptPath` rejected or script unreadable). Once the tool returns a task/run ID, retain it: wait for that run, or resume that same run with `resumeFromRunId` if paused; do not launch another copy while its status is active or unknown. Any error after launch is `workflow_failed`.
+Use the same `args` (below) at each step of this chain, moving to the next step only when the current one is rejected **before** the workflow starts (`scriptPath` rejected or script unreadable). Once the tool returns a task/run ID, retain it: wait for that run, or resume that same run with `resumeFromRunId` if paused; do not launch another copy while its status is active or unknown. A retryable polling/resume error (including 429) does not establish run failure: retain the run ID and retry inspection/resume with backoff. Enter `workflow_failed` only for a confirmed terminal run without a usable result.
 
 1. `Workflow({ scriptPath: "<WORKFLOW_SCRIPT>", args: { ... } })`, substituting the manifest's literal absolute path. This is the first call for a normal repo/worktree session. The tool requires a path within the session's readable directories (working directory or an added directory); skip to step 2 when the copy is outside those directories, usually `NO_GIT=1` with a session dir under `~/.cache/committee/`.
 2. When step 1 is skipped or rejected (`scriptPath must be a script path this tool returned, or a file you can already read`): copy the installed script to a unique per-review subdirectory of the session scratchpad named in your system prompt, using a real copy, never a symlink (the tool checks the resolved target): `mkdir -p -- "<scratchpad>/<session-basename>"` then `cp -- "$WORKFLOW_SCRIPT" "<scratchpad>/<session-basename>/committee-review.js"`. Invoke `Workflow` with `scriptPath` set to that copy's literal absolute path. Record this per-review scratchpad subdirectory for Cleanup. Do not invent a scratchpad path or write into the reviewed directory for a non-git review.
@@ -209,7 +209,7 @@ Any `prepare.sh` or pre-dispatch bash failure: print the error output to the use
 </failure_mode>
 
 <failure_mode name="workflow_failed">
-The `Workflow` call errored or returned no usable result → tell the user the review workflow failed, note that `$SESSION_DIR` is preserved for inspection, and STOP. Do not delete the session dir. For PR scope, still run `git update-ref -d "$PR_BASE_REF"` so the fetched `refs/pr-committee/*` ref is not left behind.
+All pre-launch dispatch routes were rejected, or the run is confirmed terminal without a usable result → tell the user the review workflow failed, note that `$SESSION_DIR` is preserved for inspection, and STOP. Do not delete the session dir. For PR scope, still run `git update-ref -d "$PR_BASE_REF"` so the fetched `refs/pr-committee/*` ref is not left behind.
 </failure_mode>
 
 ## Evaluate and display
@@ -224,4 +224,4 @@ The workflow returns `{ quorum, degraded, perReviewer: [{reviewer, ran_ok, note?
 
 After the workflow completes successfully, also remove the recorded per-review scratchpad subdirectory, if one was created (never the whole session scratchpad). Preserve that copy with `$SESSION_DIR` on workflow errors.
 
-Run `rm -rf -- "$SESSION_DIR"`. If PR scope and `PR_BASE_REF` is set, also `git update-ref -d "$PR_BASE_REF"`. If the `Workflow` call itself errored, do NOT delete `$SESSION_DIR` — tell the user it is preserved for inspection — but STILL run `git update-ref -d "$PR_BASE_REF"` for PR scope (committee's own `refs/pr-committee/*` namespace; leaving it leaks a stale ref).
+Run `rm -rf -- "$SESSION_DIR"`. If PR scope and `PR_BASE_REF` is set, also `git update-ref -d "$PR_BASE_REF"`. On a `workflow_failed` outcome, do NOT delete `$SESSION_DIR` — tell the user it is preserved for inspection — but STILL run `git update-ref -d "$PR_BASE_REF"` for PR scope (committee's own `refs/pr-committee/*` namespace; leaving it leaks a stale ref).
